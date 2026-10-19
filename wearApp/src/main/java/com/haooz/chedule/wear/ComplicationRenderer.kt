@@ -3,6 +3,10 @@ package com.haooz.chedule.wear
 import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.drawable.Icon
 import androidx.wear.complications.data.ComplicationData
 import androidx.wear.complications.data.ComplicationText
@@ -11,6 +15,7 @@ import androidx.wear.complications.data.CountDownTimeReference
 import androidx.wear.complications.data.LongTextComplicationData
 import androidx.wear.complications.data.MonochromaticImage
 import androidx.wear.complications.data.MonochromaticImageComplicationData
+import androidx.wear.complications.data.PhotoImageComplicationData
 import androidx.wear.complications.data.PlainComplicationText
 import androidx.wear.complications.data.RangedValueComplicationData
 import androidx.wear.complications.data.ShortTextComplicationData
@@ -115,6 +120,8 @@ object ComplicationRenderer {
         ComplicationType.RANGED_VALUE -> rangedValue(context, state, settings, nowMillis, isPreview)
         ComplicationType.MONOCHROMATIC_IMAGE -> monochromeImage(context, state)
         ComplicationType.SMALL_IMAGE -> smallImage(context, state)
+        // 三星表盘的中央大组件请求的就是 PHOTO_IMAGE；漏掉它这一格永远空着
+        ComplicationType.PHOTO_IMAGE -> photoImage(context, state, settings, nowMillis, isPreview)
         // 没注册的类型不该被请求到；返回 null 让系统显示空槽位而不是崩
         else -> null
     }
@@ -341,6 +348,125 @@ object ComplicationRenderer {
             ).build(),
             text(describeState(state)),
         ).setTapAction(tapIntent(context)).build()
+    }
+
+    /**
+     * PHOTO_IMAGE：三星表盘**中央大组件**用的类型。
+     *
+     * 这一类只接受一张图，没有 title/text 槽位，所以课名、地点、倒计时都得画进图里。
+     * 代价：图片不会自己跳秒。倒计时按整分钟显示，并在状态切换时由
+     * [ComplicationUpdater] 触发重绘，避免显示一个僵住不动的秒数。
+     */
+    private fun photoImage(
+        context: Context,
+        state: WatchState,
+        settings: WearSettings,
+        nowMillis: Long,
+        isPreview: Boolean,
+    ): ComplicationData {
+        val bitmap = renderPhotoBitmap(context, state, settings, isPreview)
+        return PhotoImageComplicationData.Builder(
+            Icon.createWithBitmap(bitmap),
+            text(describeState(state)),
+        ).setTapAction(tapIntent(context)).build()
+    }
+
+    /** 画一张方形图：状态 + 课名 + 地点/教师 + 倒计时 */
+    private fun renderPhotoBitmap(
+        context: Context,
+        state: WatchState,
+        settings: WearSettings,
+        isPreview: Boolean,
+    ): Bitmap {
+        val size = 400
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+        // 表盘底色多为深色：深底浅字，AOD 与彩色模式下都能读
+        canvas.drawColor(Color.BLACK)
+        paint.color = Color.WHITE
+        paint.textAlign = Paint.Align.CENTER
+        val centerX = size / 2f
+
+        paint.textSize = 34f
+        paint.isFakeBoldText = false
+        canvas.drawText(headlineOf(state), centerX, 72f, paint)
+
+        val (primary, secondary) = when (state) {
+            is WatchState.InClass -> state.course.name to listOfNotNull(
+                state.course.classroom.takeIf { settings.showClassroom && it.isNotEmpty() },
+                state.course.teacher.takeIf { settings.showTeacher && it.isNotEmpty() },
+            ).joinToString(" · ")
+
+            is WatchState.OnBreak -> state.next.name to
+                listOfNotNull(
+                    clockOf(state.next.startMinute) + " 上课",
+                    state.next.classroom.takeIf { settings.showClassroom && it.isNotEmpty() },
+                ).joinToString(" · ")
+
+            WatchState.Done -> "今天没有课" to ""
+            WatchState.NoData -> "还没同步" to "打开手机 App"
+        }
+
+        paint.textSize = 44f
+        paint.isFakeBoldText = true
+        drawWrapped(canvas, paint, primary, centerX, 150f, size - 48f, 50f)
+
+        if (secondary.isNotEmpty()) {
+            paint.textSize = 28f
+            paint.isFakeBoldText = false
+            canvas.drawText(secondary, centerX, 268f, paint)
+        }
+
+        val remain = when (state) {
+            is WatchState.InClass -> minutesLabel(state.remainToEndMillis)
+            is WatchState.OnBreak ->
+                if (settings.breakCountdown) minutesLabel(state.remainToStartMillis)
+                else clockOf(state.next.startMinute)
+
+            else -> ""
+        }
+        if (remain.isNotEmpty()) {
+            paint.textSize = 42f
+            paint.isFakeBoldText = false
+            canvas.drawText(remain, centerX, size - 48f, paint)
+        }
+        return bitmap
+    }
+
+    private fun minutesLabel(remainMillis: Long): String {
+        val minutes = (remainMillis.coerceAtLeast(0) + 59_999) / 60_000
+        return if (minutes >= 60) "${minutes / 60}小时${minutes % 60}分" else "${minutes}分"
+    }
+
+    /** 按宽度折行，最多两行，超出补省略号 */
+    private fun drawWrapped(
+        canvas: Canvas,
+        paint: Paint,
+        value: String,
+        centerX: Float,
+        startY: Float,
+        maxWidth: Float,
+        lineHeight: Float,
+    ) {
+        val lines = mutableListOf<String>()
+        var rest = value
+        while (rest.isNotEmpty() && lines.size < 2) {
+            val count = paint.breakText(rest, true, maxWidth, null).coerceAtLeast(1)
+            if (count >= rest.length) {
+                lines += rest
+                rest = ""
+                break
+            }
+            lines += rest.substring(0, count)
+            rest = rest.substring(count)
+        }
+        if (lines.isEmpty()) return
+        if (rest.isNotEmpty()) lines[lines.lastIndex] = lines.last().dropLast(1) + "…"
+        lines.forEachIndexed { i, line ->
+            canvas.drawText(line, centerX, startY + i * lineHeight, paint)
+        }
     }
 
     private fun bookImage(context: Context): MonochromaticImage =

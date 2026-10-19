@@ -57,6 +57,42 @@ object SnapshotStore {
         }.getOrDefault(TodaySnapshot.empty())
     }
 
+    /**
+     * 直接从 Data Layer 读回手机最近一次写入的课表。
+     *
+     * 这是同步的主路径。Wear OS 的 app 间通道只有 GMS Data Layer，它底层走的是
+     * 手机与手表之间的**蓝牙**链路（不需要 Wi-Fi，也不需要能访问 Google）。
+     * `putDataItem` 写入的 DataItem 是持久化的：手机写完之后即便暂时断连，
+     * 重新连上会自动同步过来，手表也能直接从本地缓存读回。
+     *
+     * 之前只依赖 [requestFromPhone] 发消息，一旦 `connectedNodes` 返回空，
+     * 整条同步链就静默断掉，表盘永远停在「还没同步」。
+     *
+     * @return 读到并落盘返回 true
+     */
+    suspend fun pullFromDataLayer(context: Context): Boolean = runCatching {
+        val buffer = Wearable.getDataClient(context)
+            .getDataItems(android.net.Uri.parse("wear://*/$PATH_TODAY"))
+            .await()
+        try {
+            for (item in buffer) {
+                val path = item.uri.path ?: continue
+                if (path != PATH_TODAY) continue
+                val snapshot = ScheduleSyncService.decode(
+                    com.google.android.gms.wearable.DataMapItem.fromDataItem(item)
+                )
+                if (snapshot.courses.isNotEmpty() || snapshot.sentAtMillis > 0L) {
+                    save(context, snapshot)
+                    ComplicationUpdater.refresh(context)
+                    return@runCatching true
+                }
+            }
+            false
+        } finally {
+            buffer.release()
+        }
+    }.getOrDefault(false)
+
     /** 手表主动向手机要一次：用户刚装好、或者换了一天没收到推送 */
     suspend fun requestFromPhone(context: Context): Boolean = runCatching {
         val nodes = Wearable.getNodeClient(context).connectedNodes.await()
@@ -67,4 +103,21 @@ object SnapshotStore {
         }
         nodes.isNotEmpty()
     }.getOrDefault(false)
+
+    /**
+     * 同步一次：先拉 Data Layer（不依赖手机在线），再请求手机重推（拿最新）。
+     *
+     * @return 是否拿到了数据
+     */
+    suspend fun syncNow(context: Context): Boolean {
+        val pulled = pullFromDataLayer(context)
+        val asked = requestFromPhone(context)
+        if (asked) {
+            // 等手机回推落地；蓝牙往返通常 1~3 秒
+            kotlinx.coroutines.delay(2000)
+        }
+        return pullFromDataLayer(context) || pulled
+    }
+
+    private const val PATH_TODAY = ScheduleSyncService.PATH_TODAY
 }

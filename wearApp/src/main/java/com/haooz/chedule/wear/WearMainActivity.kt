@@ -61,27 +61,15 @@ class WearMainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val syncOnLaunch = intent?.action == ACTION_SYNC_NOW
         setContent {
-            WearApp(
-                syncOnLaunch = syncOnLaunch,
-                onRequestSync = { requestSync() },
-            )
+            WearApp(syncOnLaunch = syncOnLaunch)
         }
     }
 
-    /** 让手机重推一次今天的课表 */
-    private fun requestSync() {
-        kotlinx.coroutines.MainScope().launch {
-            SnapshotStore.requestFromPhone(this@WearMainActivity)
-        }
-    }
 }
 
 /** 手表端主题 + 主界面 */
 @Composable
-private fun WearApp(
-    syncOnLaunch: Boolean,
-    onRequestSync: () -> Unit,
-) {
+private fun WearApp(syncOnLaunch: Boolean) {
     MaterialTheme {
         AppScaffold {
             val listState = rememberScalingLazyListState()
@@ -90,7 +78,6 @@ private fun WearApp(
                     contentPadding = contentPadding,
                     listState = listState,
                     syncOnLaunch = syncOnLaunch,
-                    onRequestSync = onRequestSync,
                 )
             }
         }
@@ -102,17 +89,25 @@ private fun WearHome(
     contentPadding: androidx.compose.foundation.layout.PaddingValues,
     listState: androidx.wear.compose.foundation.lazy.ScalingLazyListState,
     syncOnLaunch: Boolean,
-    onRequestSync: () -> Unit,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val settings = remember { WearSettings(context) }
     var snapshot by remember { mutableStateOf(TodaySnapshot.empty()) }
     var syncing by remember { mutableStateOf(false) }
+    /** 同步没拿到数据时给出明确反馈，而不是让界面一直停在「还没同步」 */
+    var syncFailed by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    // 每次进入界面都重读本地快照：手机可能在后台推过新数据
+    // 每次进入界面先读本地缓存，再主动同步一次：
+    // 只有 pull 路径能覆盖「节点列表为空但 DataItem 已在本地」的情况，
+    // 这也是手表刚装好、手机不在身边时唯一的出路。
     LaunchedEffect(Unit) {
         snapshot = SnapshotStore.load(context)
+        syncing = true
+        val ok = SnapshotStore.syncNow(context)
+        snapshot = SnapshotStore.load(context)
+        syncFailed = !ok
+        syncing = false
     }
 
     var showTeacher by remember { mutableStateOf(settings.showTeacher) }
@@ -121,13 +116,9 @@ private fun WearHome(
     var precise by remember { mutableStateOf(settings.preciseCountdown) }
 
     LaunchedEffect(syncOnLaunch) {
+        // 从表盘点进来时上面的 LaunchedEffect 已经同步过一次，这里只负责刷新显示
         if (!syncOnLaunch) return@LaunchedEffect
-        syncing = true
-        onRequestSync()
-        // 给手机一点时间回推；拿不到就维持现状，用户可下拉再试
-        kotlinx.coroutines.delay(2500)
         snapshot = SnapshotStore.load(context)
-        syncing = false
     }
 
     val nowMinute = LocalTime.now().let { it.hour + it.minute / 60.0 + it.second / 3600.0 }
@@ -141,7 +132,7 @@ private fun WearHome(
         item { ListHeader { Text("Nexio 课程表") } }
 
         item {
-            CurrentCourseCard(state = state, snapshot = snapshot)
+            CurrentCourseCard(state = state, snapshot = snapshot, syncFailed = syncFailed)
         }
 
         if (state is WatchState.OnBreak && snapshot.courses.isNotEmpty()) {
@@ -170,9 +161,9 @@ private fun WearHome(
                     if (syncing) return@Button
                     syncing = true
                     scope.launch {
-                        onRequestSync()
-                        kotlinx.coroutines.delay(2500)
+                        val ok = SnapshotStore.syncNow(context)
                         snapshot = SnapshotStore.load(context)
+                        syncFailed = !ok
                         syncing = false
                     }
                 },
@@ -232,7 +223,11 @@ private fun WearHome(
 
 /** 当前状态卡片：显示正在上的课 / 下一节 / 空状态 */
 @Composable
-private fun CurrentCourseCard(state: WatchState, snapshot: TodaySnapshot) {
+private fun CurrentCourseCard(
+    state: WatchState,
+    snapshot: TodaySnapshot,
+    syncFailed: Boolean,
+) {
     val title = ComplicationRenderer.headlineOf(state)
     val (line1, line2) = when (state) {
         is WatchState.InClass -> state.course.name to buildString {
@@ -249,7 +244,9 @@ private fun CurrentCourseCard(state: WatchState, snapshot: TodaySnapshot) {
         WatchState.Done -> "今天没有课了" to
             if (snapshot.courses.isEmpty()) "打开手机 App 同步一次" else "好好休息"
 
-        WatchState.NoData -> "还没收到课表" to "点下方按钮从手机同步"
+        WatchState.NoData -> "还没收到课表" to
+            if (syncFailed) "同步失败：确认手机蓝牙已连接且装了手表端"
+            else "点下方按钮从手机同步"
     }
 
     Card(
