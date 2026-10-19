@@ -26,7 +26,7 @@ class TodayCoursesProvider : ContentProvider() {
         selectionArgs: Array<out String>?,
         sortOrder: String?,
     ): Cursor {
-        val match = uriMatcher.match(uri)
+        val match = matcherFor(requireNotNull(context)).match(uri)
         require(match == TODAY_COURSES || match == TOMORROW_COURSES || match == DISPLAY_COURSES || match == DISPLAY_STATE) {
             "Unsupported URI: $uri"
         }
@@ -86,7 +86,7 @@ class TodayCoursesProvider : ContentProvider() {
     }
 
     override fun getType(uri: Uri): String {
-        val match = uriMatcher.match(uri)
+        val match = matcherFor(requireNotNull(context)).match(uri)
         require(match == TODAY_COURSES || match == TOMORROW_COURSES || match == DISPLAY_COURSES || match == DISPLAY_STATE) {
             "Unsupported URI: $uri"
         }
@@ -306,7 +306,10 @@ val subText = when {
     )
 
     companion object {
-        const val AUTHORITY = "com.haooz.chedule.courses"
+        // 与 manifest 的 ${applicationId}.courses 保持一致：写死包名的话，
+        // 换成共存包后 manifest 与代码指向两个不同的 authority，provider 直接失效
+        // authority 跟包名走：写死包名会让共存包指向原版的 provider
+        fun authorityFor(context: android.content.Context): String = "${context.packageName}.courses"
         // sx=1 设计基准字号，用于 App 端测量截断
         const val NAME_TEXT_SIZE = 14f
         const val SUB_TEXT_SIZE = 12f
@@ -384,12 +387,20 @@ val subText = when {
 
         val DAY_NAMES = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 
-        val uriMatcher = UriMatcher(UriMatcher.NO_MATCH).apply {
-            addURI(AUTHORITY, PATH_TODAY, TODAY_COURSES)
-            addURI(AUTHORITY, PATH_TOMORROW, TOMORROW_COURSES)
-            addURI(AUTHORITY, PATH_DISPLAY, DISPLAY_COURSES)
-            addURI(AUTHORITY, PATH_STATE, DISPLAY_STATE)
-        }
+        // uriMatcher 依赖包名，只能在拿到 Context 之后建；缓存一次，provider 进程内复用
+        @Volatile
+        private var cachedMatcher: UriMatcher? = null
+
+        private fun matcherFor(context: android.content.Context): UriMatcher =
+            cachedMatcher ?: synchronized(this) {
+                cachedMatcher ?: UriMatcher(UriMatcher.NO_MATCH).apply {
+                    val authority = authorityFor(context)
+                    addURI(authority, PATH_TODAY, TODAY_COURSES)
+                    addURI(authority, PATH_TOMORROW, TOMORROW_COURSES)
+                    addURI(authority, PATH_DISPLAY, DISPLAY_COURSES)
+                    addURI(authority, PATH_STATE, DISPLAY_STATE)
+                }.also { cachedMatcher = it }
+            }
 
         fun notifyScheduleChanged(context: android.content.Context) {
             dispatchTodayCoursesProviderNotifications(context.packageName) { uri ->
