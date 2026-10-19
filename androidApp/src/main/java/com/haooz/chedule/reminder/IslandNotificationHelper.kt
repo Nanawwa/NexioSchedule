@@ -828,7 +828,7 @@ object IslandNotificationHelper {
                 put("type", 2)
                 put("title", "课间")
                 put("content", if (nextStartTime.isNotEmpty()) "$nextCourseName $nextStartTime" else nextCourseName)
-                put("subTitle", "")
+                put("subTitle", nextSection)
                 put("extraTitle", "")
                 put("specialTitle", "")
                 put("subContent", "")
