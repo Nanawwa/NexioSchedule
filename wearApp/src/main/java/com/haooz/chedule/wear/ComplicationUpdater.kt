@@ -6,7 +6,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.util.Log
-import androidx.wear.complications.datasource.ComplicationDataSourceUpdateRequester
+import androidx.wear.watchface.complications.datasource.ComplicationDataSourceUpdateRequester
 
 /**
  * 通知表盘「这一项数据变了」。

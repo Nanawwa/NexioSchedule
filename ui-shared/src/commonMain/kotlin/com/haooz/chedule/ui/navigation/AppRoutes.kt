@@ -79,6 +79,7 @@ import com.haooz.chedule.ui.activities.BackupAndMigrationScreen
 import com.haooz.chedule.ui.activities.ChangelogScreen
 import com.haooz.chedule.ui.activities.CommunicationScreen
 import com.haooz.chedule.ui.activities.CourseManageScreen
+import com.haooz.chedule.ui.screens.TempAdjustScreen
 import com.haooz.chedule.ui.activities.CourseReminderScreen
 import com.haooz.chedule.ui.activities.CourseTimeSettingsScreen
 import com.haooz.chedule.ui.activities.EduImportUpdater
@@ -1237,6 +1238,28 @@ fun CourseManageRoute(
             onMeasuredSize = { _, height ->
                 shortcutMenuHeight = height.toFloat()
             }
+        )
+    }
+}
+
+/**
+ * 临时调课页面。
+ *
+ * [onChanged] 在每次保存/恢复后触发，宿主用它重排提醒并刷新今日页与小组件。
+ */
+@Composable
+fun TempAdjustRoute(
+    router: AppRouter,
+    onChanged: () -> Unit = {},
+) {
+    DocumentPageScaffold(
+        title = "临时调课",
+        onBack = { router.popBack() },
+    ) { scrollBehavior, backdrop ->
+        TempAdjustScreen(
+            scrollBehavior = scrollBehavior,
+            liquidGlassBackdrop = backdrop,
+            onChanged = onChanged,
         )
     }
 }

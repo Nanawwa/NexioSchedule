@@ -397,6 +397,13 @@ fun SettingsScreen(
                                     }
                                 )
                                 ArrowPreference(
+                                    title = "临时调课",
+                                    summary = "只改某一天：停上、换教室、改节次或加一节",
+                                    onClick = {
+                                        settingsRouter.navigate(AppRoute.TempAdjust)
+                                    }
+                                )
+                                ArrowPreference(
                                     title = "节假日与调休",
                                     onClick = {
                                         FeatureLog.holiday("open")

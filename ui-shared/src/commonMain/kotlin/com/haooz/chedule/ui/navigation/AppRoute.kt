@@ -111,6 +111,14 @@ sealed interface AppRoute {
     }
 
     /**
+     * 临时调课 —— 只改某一天，不动课表原数据。
+     * 入口放在「我的 → 课程提醒」同级，比藏在课程详情里更好找。
+     */
+    data object TempAdjust : AppRoute {
+        override val id: String get() = "temp_adjust"
+    }
+
+    /**
      * 教务系统导入 —— 学校/适配器选择。页面本体见 `ui/screens/EducationalImportScreen.kt`。
      */
     data object EducationalImport : AppRoute {
@@ -147,6 +155,7 @@ sealed interface AppRoute {
             WebDavSettings.id -> WebDavSettings
             CourseTimeSettings.id -> CourseTimeSettings
             CourseManage.id -> CourseManage
+            TempAdjust.id -> TempAdjust
             EducationalImport.id -> EducationalImport
             WebImport.id -> WebImport
             else -> null

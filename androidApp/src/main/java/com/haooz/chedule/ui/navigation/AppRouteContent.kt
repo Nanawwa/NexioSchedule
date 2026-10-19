@@ -254,6 +254,13 @@ fun AppRouteContent(
             router = router,
             isInFreeformWindow = isInFreeformWindow(),
         )
+        AppRoute.TempAdjust -> {
+            val context = LocalContext.current
+            TempAdjustRoute(
+                router = router,
+                onChanged = { CourseReminderHelper.onHolidayDataChanged(context) },
+            )
+        }
         AppRoute.EducationalImport -> AndroidEducationalImportRoute(router)
         AppRoute.WebImport -> AndroidWebImportRoute(router)
     }

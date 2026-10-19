@@ -702,7 +702,7 @@ fun CourseDetailScreen(
  * 课表原始数据一个字节都不改 —— 日期过去后自动失效，用户也可以手动恢复。
  */
 @Composable
-private fun TempAdjustDialog(
+internal fun TempAdjustDialog(
     target: Pair<Course, LocalDate>?,
     onDismiss: () -> Unit,
     onSaved: () -> Unit,

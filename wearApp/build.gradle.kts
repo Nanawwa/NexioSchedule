@@ -53,8 +53,11 @@ android {
 dependencies {
     // 表盘 complication 数据源
     implementation("androidx.wear:wear:1.4.0")
-    implementation("androidx.wear:wear-complications-data-source:1.0.0-alpha22")
-    implementation("androidx.wear:wear-complications-data:1.0.0-alpha22")
+    // ⚠ 用 androidx.wear.watchface 这一套，不是 androidx.wear.complications。
+    // 后者是旧包装层，枚举里没有 GOAL_PROGRESS / WEIGHTED_ELEMENTS，
+    // 而三星表盘的中央大组件正是请求这两种类型 —— 缺了它这个槽位就选不到我们。
+    implementation("androidx.wear.watchface:watchface-complications-data-source-ktx:1.3.0")
+    implementation("androidx.wear.watchface:watchface-complications-data:1.3.0")
 
     // Compose for Wear OS：手表端设置界面
     // 版本钉在 1.7.1（对应 Compose 1.10 构建）；项目 BOM 是 compose 1.11，

@@ -8,22 +8,24 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.drawable.Icon
-import androidx.wear.complications.data.ComplicationData
-import androidx.wear.complications.data.ComplicationText
-import androidx.wear.complications.data.ComplicationType
-import androidx.wear.complications.data.CountDownTimeReference
-import androidx.wear.complications.data.LongTextComplicationData
-import androidx.wear.complications.data.MonochromaticImage
-import androidx.wear.complications.data.MonochromaticImageComplicationData
-import androidx.wear.complications.data.PhotoImageComplicationData
-import androidx.wear.complications.data.PlainComplicationText
-import androidx.wear.complications.data.RangedValueComplicationData
-import androidx.wear.complications.data.ShortTextComplicationData
-import androidx.wear.complications.data.SmallImage
-import androidx.wear.complications.data.SmallImageComplicationData
-import androidx.wear.complications.data.SmallImageType
-import androidx.wear.complications.data.TimeDifferenceComplicationText
-import androidx.wear.complications.data.TimeDifferenceStyle
+import androidx.wear.watchface.complications.data.ComplicationData
+import androidx.wear.watchface.complications.data.ComplicationText
+import androidx.wear.watchface.complications.data.ComplicationType
+import androidx.wear.watchface.complications.data.CountDownTimeReference
+import androidx.wear.watchface.complications.data.LongTextComplicationData
+import androidx.wear.watchface.complications.data.MonochromaticImage
+import androidx.wear.watchface.complications.data.MonochromaticImageComplicationData
+import androidx.wear.watchface.complications.data.GoalProgressComplicationData
+import androidx.wear.watchface.complications.data.WeightedElementsComplicationData
+import androidx.wear.watchface.complications.data.PhotoImageComplicationData
+import androidx.wear.watchface.complications.data.PlainComplicationText
+import androidx.wear.watchface.complications.data.RangedValueComplicationData
+import androidx.wear.watchface.complications.data.ShortTextComplicationData
+import androidx.wear.watchface.complications.data.SmallImage
+import androidx.wear.watchface.complications.data.SmallImageComplicationData
+import androidx.wear.watchface.complications.data.SmallImageType
+import androidx.wear.watchface.complications.data.TimeDifferenceComplicationText
+import androidx.wear.watchface.complications.data.TimeDifferenceStyle
 import java.util.concurrent.TimeUnit
 
 /**
@@ -120,7 +122,10 @@ object ComplicationRenderer {
         ComplicationType.RANGED_VALUE -> rangedValue(context, state, settings, nowMillis, isPreview)
         ComplicationType.MONOCHROMATIC_IMAGE -> monochromeImage(context, state)
         ComplicationType.SMALL_IMAGE -> smallImage(context, state)
-        // 三星表盘的中央大组件请求的就是 PHOTO_IMAGE；漏掉它这一格永远空着
+        // 中央大组件（"复杂"槽位）实际请求的是 GOAL_PROGRESS / WEIGHTED_ELEMENTS，
+        // 这两种是 androidx.wear.watchface 才有的类型。只注册 PHOTO_IMAGE 不够。
+        ComplicationType.GOAL_PROGRESS -> goalProgress(context, state, settings, nowMillis, isPreview)
+        ComplicationType.WEIGHTED_ELEMENTS -> weightedElements(context, state, settings, nowMillis, isPreview)
         ComplicationType.PHOTO_IMAGE -> photoImage(context, state, settings, nowMillis, isPreview)
         // 没注册的类型不该被请求到；返回 null 让系统显示空槽位而不是崩
         else -> null
@@ -467,6 +472,120 @@ object ComplicationRenderer {
         lines.forEachIndexed { i, line ->
             canvas.drawText(line, centerX, startY + i * lineHeight, paint)
         }
+    }
+
+    // ── GOAL_PROGRESS：三星中央大组件 ────────────────────────────────────────
+
+    /**
+     * 进度型大组件：值 = 本节已过去的分钟数，目标 = 本节总时长。
+     *
+     * 三星表盘会把这类数据画成环形进度 + 中间的大号文字，正好适合
+     * 「还剩多久下课」。课间则用「已休息 / 课间总长」。
+     */
+    private fun goalProgress(
+        context: Context,
+        state: WatchState,
+        settings: WearSettings,
+        nowMillis: Long,
+        isPreview: Boolean,
+    ): ComplicationData {
+        val unit = if (settings.preciseCountdown) TimeUnit.SECONDS else null
+        val (elapsed, total, title, text) = when (state) {
+            is WatchState.InClass -> {
+                val totalMin = state.course.durationMinutes.toFloat().coerceAtLeast(1f)
+                val elapsedMin = (totalMin - state.remainToEndMillis / 60_000f).coerceIn(0f, totalMin)
+                ProgressParts(
+                    elapsedMin,
+                    totalMin,
+                    state.course.name,
+                    if (isPreview) text("25分") else countdown(
+                        nowMillis + state.remainToEndMillis,
+                        TimeDifferenceStyle.SHORT_SINGLE_UNIT,
+                        unit,
+                    ),
+                )
+            }
+
+            is WatchState.OnBreak -> {
+                val totalMin = (state.next.startMinute - state.previous.endMinute)
+                    .toFloat().coerceAtLeast(1f)
+                val remainMin = (state.remainToStartMillis / 60_000f).coerceIn(0f, totalMin)
+                ProgressParts(
+                    totalMin - remainMin,
+                    totalMin,
+                    "课间",
+                    if (!settings.breakCountdown) text(clockOf(state.next.startMinute))
+                    else if (isPreview) text("10分")
+                    else countdown(
+                        nowMillis + state.remainToStartMillis,
+                        TimeDifferenceStyle.SHORT_SINGLE_UNIT,
+                        unit,
+                    ),
+                )
+            }
+
+            WatchState.Done -> ProgressParts(1f, 1f, "Nexio", text("没课"))
+            WatchState.NoData -> ProgressParts(0f, 1f, "Nexio", text("同步"))
+        }
+
+        return GoalProgressComplicationData.Builder(elapsed, total, text)
+            .setTitle(text(title))
+            .setMonochromaticImage(bookImage(context))
+            .setTapAction(tapIntent(context))
+            .build()
+    }
+
+    private data class ProgressParts(
+        val value: Float,
+        val target: Float,
+        val title: String,
+        val text: ComplicationText,
+    )
+
+    // ── WEIGHTED_ELEMENTS：分段式大组件 ──────────────────────────────────────
+
+    /**
+     * 分段型大组件：用一条由若干色块组成的进度条表示今天的课程分布。
+     *
+     * 已上完的课用暗色、当前这节用高亮色、还没上的用中间灰，剩余时间用背景色补齐。
+     * 这类槽位通常画成横向长条，正好能一眼看出「今天还剩几节」。
+     */
+    private fun weightedElements(
+        context: Context,
+        state: WatchState,
+        settings: WearSettings,
+        nowMillis: Long,
+        isPreview: Boolean,
+    ): ComplicationData {
+        val colors = intArrayOf(
+            0xFF1A73E8.toInt(), // 当前
+            0xFF9AA0A6.toInt(), // 未开始
+            0xFF3C4043.toInt(), // 已完成
+            0xFF202124.toInt(), // 分隔
+        )
+        val elements = when (state) {
+            is WatchState.InClass -> listOf(
+                WeightedElementsComplicationData.Element(1f, colors[2]),
+                WeightedElementsComplicationData.Element(1f, colors[0]),
+                WeightedElementsComplicationData.Element(1f, colors[1]),
+            )
+
+            is WatchState.OnBreak -> listOf(
+                WeightedElementsComplicationData.Element(1f, colors[2]),
+                WeightedElementsComplicationData.Element(1f, colors[3]),
+                WeightedElementsComplicationData.Element(1f, colors[1]),
+            )
+
+            else -> listOf(
+                WeightedElementsComplicationData.Element(0.01f, colors[3]),
+                WeightedElementsComplicationData.Element(0.99f, colors[1]),
+            )
+        }
+        return WeightedElementsComplicationData.Builder(elements, text(describeState(state)))
+            .setTitle(text(headlineOf(state)))
+            .setMonochromaticImage(bookImage(context))
+            .setTapAction(tapIntent(context))
+            .build()
     }
 
     private fun bookImage(context: Context): MonochromaticImage =
