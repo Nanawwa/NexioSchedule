@@ -29,6 +29,9 @@ class AndroidUpdateController(private val context: Context) : UpdateController {
         }
 
     override fun checkForUpdate(source: String, channel: String): Pair<Boolean, UpdateRelease?> {
+        // 共存包不查上游更新：上游 release 的 APK 用的是原版包名，
+        // 引导用户装上等于把 fork 功能整个换掉，还可能与已装的原版冲突。
+        if (com.haooz.chedule.BuildConfig.IS_FORK_BUILD) return false to null
         val (update, release) = UpdateChecker.checkForUpdate(context, source, channel)
         return update to release?.toCore()
     }

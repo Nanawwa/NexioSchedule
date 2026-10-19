@@ -39,6 +39,13 @@ android {
             )
         }
     }
+
+    // 共存构建（换过 applicationId）不查上游更新：上游 release 装上去会把 fork 功能换掉
+    defaultConfig {
+        val isFork = ((project.findProperty("nexioAppId") as String?)
+            ?: "com.haooz.chedule") != "com.haooz.chedule"
+        buildConfigField("boolean", "IS_FORK_BUILD", isFork.toString())
+    }
     packaging {
         dex {
             useLegacyPackaging = true
