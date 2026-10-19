@@ -1,4 +1,4 @@
 <resources>
     <!-- 共存版用独立应用名，桌面上能与原版区分 -->
-    <string name="app_name">Nexio课程表 Fork</string>
+    <string name="app_name">R-Nexio课程表</string>
 </resources>

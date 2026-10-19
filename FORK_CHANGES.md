@@ -129,7 +129,7 @@ Complication 的主动刷新被系统限制在平均 5 分钟一次，自己刷�
 
 - 默认值仍是 `com.haooz.chedule`（与原版相同）
 - 通过 `-PnexioAppId=com.haooz.chedule.fork` 构建共存版
-- 应用名显示为「Nexio课程表 Fork」
+- 应用名显示为「R-Nexio课程表」
 
 顺带修了一处会让共存版失效的问题：`TodayCoursesProvider` 的 authority 原来写死成 `com.haooz.chedule.courses`，而 manifest 里是 `${applicationId}.courses`。改包名后两者不一致，provider 会直接失效。现在从 `context.packageName` 推导，两边始终一致。
 

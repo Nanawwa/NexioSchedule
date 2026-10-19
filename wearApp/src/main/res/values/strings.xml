@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Nexio 表盘数据</string>
+    <string name="app_name">R-Nexio 表盘数据</string>
     <string name="complication_label">课程表</string>
 </resources>
