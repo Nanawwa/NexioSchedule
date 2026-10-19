@@ -34,6 +34,15 @@ object IslandNotificationHelper {
     const val KEY_BREAK_COUNTDOWN = com.haooz.chedule.data.ReminderController.KEY_BREAK_COUNTDOWN
     // 官方必选：运营场景标识
     private const val BUSINESS_TAG = "course_reminder"
+
+    /**
+     * 息屏图标资源名。系统画 `aodTitle` 时会同时取这张图；
+     * 只给标题不给图，整条 AOD 信息不会被解析。
+     *
+     * 取值来自系统解析器自带的两份官方模板（`miui.focus.pic_ado_pic` 与
+     * `miui.focus.pic_liveupdate`）。第三方包带不了同名资源，只能引用系统资源名。
+     */
+    private const val AOD_PIC = "miui.focus.pic_ado_pic"
     // 官方 sequence：保证多次更新不乱序
     private val sequenceCounter = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis() / 1000)
 
@@ -450,6 +459,10 @@ object IslandNotificationHelper {
             put("reopen", "reopen")
             put("sequence", sequenceCounter.incrementAndGet())
             put("aodTitle", aodTitle)
+            // 息屏标题必须和 aodPic 成对出现。系统解析器（MIUISystemUIPlugin）里
+            // 这两个字段是 AodInfo 的同级成员，只给 aodTitle 进不了息屏分支 ——
+            // 这正是「设置里开了息屏、锁屏后什么都不显示」的直接原因。
+            put("aodPic", AOD_PIC)
 
             val baseInfo = JSONObject().apply {
                 put("type", 2)
@@ -655,6 +668,8 @@ object IslandNotificationHelper {
             put("reopen", "reopen")
             put("sequence", sequenceCounter.incrementAndGet())
             put("aodTitle", aodTitle)
+            // 与 aodTitle 成对，缺了它息屏分支不会生效（见课前岛的说明）
+            put("aodPic", AOD_PIC)
 
             // 文本组件2
             put("baseInfo", JSONObject().apply {
@@ -815,6 +830,8 @@ object IslandNotificationHelper {
             put("reopen", "reopen")
             put("sequence", sequenceCounter.incrementAndGet())
             put("aodTitle", aodTitle)
+            // 与 aodTitle 成对，缺了它息屏分支不会生效（见课前岛的说明）
+            put("aodPic", AOD_PIC)
 
             put("baseInfo", JSONObject().apply {
                 put("type", 2)

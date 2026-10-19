@@ -84,7 +84,9 @@ sealed interface WatchState {
  * @param nowMinuteOfDay 当前时刻距零点的分钟数（含小数，用毫秒精度算倒计时）
  */
 fun TodaySnapshot.resolve(nowMillis: Long, nowMinuteOfDay: Double): WatchState {
-    if (courses.isEmpty()) return WatchState.Done
+    // 没收到过任何快照 ≠ 今天没课。之前两者都返回 Done，界面就会出现
+    // 「今天没课了」+「打开手机 App 同步一次」这种自相矛盾的提示。
+    if (courses.isEmpty()) return if (sentAtMillis <= 0L) WatchState.NoData else WatchState.Done
 
     // 正在上的课：取最先开始且尚未结束的那节
     val current = courses.firstOrNull { nowMinuteOfDay >= it.startMinute && nowMinuteOfDay < it.endMinute }
@@ -106,15 +108,16 @@ fun TodaySnapshot.resolve(nowMillis: Long, nowMinuteOfDay: Double): WatchState {
     val isBreak = previous != null && previous.endMinute <= next.startMinute
     return if (isBreak) {
         WatchState.OnBreak(
-            previous = previous!!,
+            previous = previous,
             next = next,
             remainToStartMillis = ((next.startMinute - nowMinuteOfDay) * 60_000L).toLong(),
         )
     } else {
-        // 今天的课还没开始，或者前面那节已经结束很久：
-        // 仍按「距下一节」处理，但没有「上一节」可展示
+        // 今天的课还没开始（nextIndex == 0），或者前面那节已经结束很久：
+        // 仍按「距下一节」处理。没有上一节时用 next 自己顶上，
+        // 让下游算课间长度时得到 0 而不是 -1 取下标。
         WatchState.OnBreak(
-            previous = courses[nextIndex - 1].takeIf { nextIndex > 0 } ?: next,
+            previous = previous ?: next,
             next = next,
             remainToStartMillis = ((next.startMinute - nowMinuteOfDay) * 60_000L).toLong(),
         )

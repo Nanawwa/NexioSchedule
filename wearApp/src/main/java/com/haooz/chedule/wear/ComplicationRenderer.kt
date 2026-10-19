@@ -329,26 +329,17 @@ object ComplicationRenderer {
     // ── 纯图片槽位 ───────────────────────────────────────────────────────────
 
     private fun monochromeImage(context: Context, state: WatchState): ComplicationData {
-        val icon = if (state is WatchState.InClass || state is WatchState.OnBreak) {
-            android.R.drawable.ic_menu_today
-        } else {
-            android.R.drawable.ic_menu_my_calendar
-        }
         return MonochromaticImageComplicationData.Builder(
-            MonochromaticImage.Builder(Icon.createWithResource(context, icon)).build(),
+            bookImage(context),
             text(describeState(state)),
         ).setTapAction(tapIntent(context)).build()
     }
 
     private fun smallImage(context: Context, state: WatchState): ComplicationData {
-        val icon = if (state is WatchState.InClass || state is WatchState.OnBreak) {
-            android.R.drawable.ic_menu_today
-        } else {
-            android.R.drawable.ic_menu_my_calendar
-        }
+        // 图标槽位没有文字位置，只有 status 会被读屏念出来，用同一张课程图标即可
         return SmallImageComplicationData.Builder(
             SmallImage.Builder(
-                Icon.createWithResource(context, icon),
+                Icon.createWithResource(context, R.drawable.ic_complication_book),
                 SmallImageType.ICON,
             ).build(),
             text(describeState(state)),
@@ -388,8 +379,13 @@ object ComplicationRenderer {
         val canvas = Canvas(bitmap)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
-        // 表盘底色多为深色：深底浅字，AOD 与彩色模式下都能读
-        canvas.drawColor(Color.BLACK)
+        // 不铺满底色：表盘会把这张图叠在自己的背景上，画纯黑在浅色表盘上就是
+        // 一个突兀的方块。改成一层半透明深色底板托住白字 —— 深色 / 浅色 / 彩色
+        // 表盘下都能读，又不会把槽位糊死。
+        canvas.drawColor(Color.TRANSPARENT)
+        val scrimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x99000000.toInt() }
+        val inset = size * 0.06f
+        canvas.drawRoundRect(inset, inset, size - inset, size - inset, 48f, 48f, scrimPaint)
         paint.color = Color.WHITE
         paint.textAlign = Paint.Align.CENTER
         val centerX = size / 2f
@@ -590,7 +586,7 @@ object ComplicationRenderer {
 
     private fun bookImage(context: Context): MonochromaticImage =
         MonochromaticImage.Builder(
-            Icon.createWithResource(context, android.R.drawable.ic_menu_agenda),
+            Icon.createWithResource(context, R.drawable.ic_complication_book),
         ).build()
 
     // ── 文案 ─────────────────────────────────────────────────────────────────

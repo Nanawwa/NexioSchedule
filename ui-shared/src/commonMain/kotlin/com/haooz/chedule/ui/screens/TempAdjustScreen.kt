@@ -1,52 +1,68 @@
 package com.haooz.chedule.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import top.yukonga.miuix.kmp.layout.SharedScrollBehavior
 import com.haooz.chedule.data.Course
 import com.haooz.chedule.data.CourseRepository
 import com.haooz.chedule.data.DayScheduleResolver
 import com.haooz.chedule.data.TempAdjustments
 import com.haooz.chedule.data.plusDays
 import com.haooz.chedule.data.todayLocalDate
-import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.isoDayNumber
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.NativeMiuixTextField
 import top.yukonga.miuix.kmp.basic.NumberPicker
-import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.layout.CollapsibleTopAppBarDefaults
+import top.yukonga.miuix.kmp.layout.SharedScrollBehavior
+import top.yukonga.miuix.kmp.layout.collapsibleTopInset
+import top.yukonga.miuix.kmp.layout.isTabletWidth
+import top.yukonga.miuix.kmp.overlay.OverlayDialog
+import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import androidx.compose.ui.input.nestedscroll.nestedScroll
+import top.yukonga.miuix.kmp.utils.overScrollVertical
+import top.yukonga.miuix.kmp.utils.scrollEndHaptic
 
 /**
  * 临时调课。
  *
- * 设计取舍：
- * - **只改某一天**，课表原数据一个字节不动。日期过后自动失效，用户也能随时恢复。
- * - 入口独立（我的 → 临时调课），不藏在课程详情里 —— 详情页只显示某一周，
- *   要改「明天」得先翻周，路径太长。
- * - 三种操作：停上本节、改节次/教室、新增一节临时课。
+ * 与「调课」（拖拽后按周拆分，会真的改写课表）不同，这里只改**选中那一天**：
+ * 停上、改节次/教室、临时加一节。课表原数据一个字节不动，日期过后自动失效。
+ *
+ * 版式跟其他设置页一致：LazyColumn + SmallTitle 分组 + Card 承载内容，
+ * 底部留 60dp 让最后一张卡片能滚到顶栏下方。
  */
 @Composable
 fun TempAdjustScreen(
@@ -61,6 +77,10 @@ fun TempAdjustScreen(
     var showAdd by remember { mutableStateOf(false) }
     var refreshKey by remember { mutableIntStateOf(0) }
 
+    val isTablet = isTabletWidth()
+    val horizontalPadding = if (isTablet) 20.dp else 16.dp
+    val haptic = LocalHapticFeedback.current
+
     // 该日解析结果已叠加调休与临时调课 —— 与今日页、小组件、提醒走同一条链路
     val courses = remember(selectedDate, refreshKey) {
         runCatching {
@@ -71,164 +91,116 @@ fun TempAdjustScreen(
         TempAdjustments.load(selectedDate)
     }
 
-    Column(
+    /** 重新读数据并通知宿主刷新提醒 / 小组件 */
+    fun reload() {
+        refreshKey++
+        onChanged()
+    }
+
+    Scaffold(topBar = {}) { padding ->
+    val listState = rememberLazyListState()
+    LazyColumn(
+        state = listState,
         modifier = Modifier
             .fillMaxSize()
-            .nestedScroll(scrollBehavior.nestedScrollConnection)
-            .padding(horizontal = 16.dp),
+            .overScrollVertical()
+            .scrollEndHaptic(hapticFeedbackType = HapticFeedbackType.TextHandleMove)
+            .collapsibleTopInset(scrollBehavior)
+            .nestedScroll(scrollBehavior.nestedScrollConnection),
+        contentPadding = PaddingValues(
+            start = horizontalPadding,
+            top = padding.calculateTopPadding() + CollapsibleTopAppBarDefaults.CollapsedHeight +
+                (if (isTablet) 24.dp else 12.dp),
+            end = horizontalPadding,
+            bottom = 60.dp,
+        ),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Spacer(Modifier.height(8.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TextButton(
-                text = "前一天",
-                onClick = { selectedDate = selectedDate.plusDays(-1) },
+        item(key = "date_nav") {
+            DateNavCard(
+                date = selectedDate,
+                today = today,
+                changeCount = changes.size,
+                onPrevious = { selectedDate = selectedDate.plusDays(-1) },
+                onNext = {
+                    if (selectedDate == today) return@DateNavCard
+                    selectedDate = selectedDate.plusDays(1)
+                },
+                onToday = { selectedDate = today },
             )
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = "${selectedDate.monthNumber}月${selectedDate.dayOfMonth}日 ${weekName(selectedDate)}",
-                    style = MiuixTheme.textStyles.body1,
-                    color = MiuixTheme.colorScheme.onSurface,
-                )
-                if (changes.isNotEmpty()) {
+        }
+
+        item(key = "courses_title") {
+            SmallTitle(text = "当天课程")
+        }
+
+        if (courses.isEmpty()) {
+            item(key = "empty") {
+                Card(modifier = Modifier.fillMaxWidth()) {
                     Text(
-                        text = "已调整 ${changes.size} 处",
-                        style = MiuixTheme.textStyles.footnote1,
-                        color = MiuixTheme.colorScheme.primary,
+                        text = "这一天没有课，可在下方新增一节临时课",
+                        style = MiuixTheme.textStyles.body2,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
                     )
                 }
             }
-            TextButton(
-                text = if (selectedDate == today) "今天" else "后一天",
-                onClick = {
-                    selectedDate = if (selectedDate == today) today else selectedDate.plusDays(1)
+        }
+
+        items(courses, key = { it.id }) { course ->
+            val cancelled = changes.any {
+                it is TempAdjustments.Change.Cancel && it.courseId == course.id
+            }
+            val moved = changes.any {
+                it is TempAdjustments.Change.Move && it.courseId == course.id
+            }
+            CourseAdjustCard(
+                course = course,
+                cancelled = cancelled,
+                moved = moved,
+                onAdjust = { editing = course to selectedDate },
+                onToggleCancel = {
+                    haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                    val others = TempAdjustments.load(selectedDate).filter {
+                        when (it) {
+                            is TempAdjustments.Change.Cancel -> it.courseId != course.id
+                            is TempAdjustments.Change.Move -> it.courseId != course.id
+                            is TempAdjustments.Change.Add -> true
+                        }
+                    }
+                    TempAdjustments.save(
+                        selectedDate,
+                        if (cancelled) others
+                        else others + TempAdjustments.Change.Cancel(course.id),
+                    )
+                    reload()
                 },
             )
         }
 
-        Spacer(Modifier.height(8.dp))
-
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            if (courses.isEmpty()) {
-                item {
-                    Card(modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            text = "这一天没有课",
-                            style = MiuixTheme.textStyles.body1,
-                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                            modifier = Modifier.padding(16.dp),
-                        )
-                    }
-                }
-            }
-
-            items(courses, key = { it.id }) { course ->
-                val cancelled = changes.any {
-                    it is TempAdjustments.Change.Cancel && it.courseId == course.id
-                }
-                val moved = changes.any {
-                    it is TempAdjustments.Change.Move && it.courseId == course.id
-                }
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = course.name,
-                                style = MiuixTheme.textStyles.body1.copy(fontSize = 17.sp),
-                                color = if (cancelled) {
-                                    MiuixTheme.colorScheme.onSurfaceVariantSummary
-                                } else {
-                                    MiuixTheme.colorScheme.onSurface
-                                },
-                            )
-                            Text(
-                                text = course.getSectionText(),
-                                style = MiuixTheme.textStyles.footnote1,
-                                color = MiuixTheme.colorScheme.primary,
-                            )
-                        }
-                        val detail = buildList {
-                            if (course.classroom.isNotEmpty()) add(course.classroom)
-                            if (course.teacher.isNotEmpty()) add(course.teacher)
-                        }.joinToString(" | ")
-                        if (detail.isNotEmpty()) {
-                            Text(
-                                text = detail,
-                                style = MiuixTheme.textStyles.body2,
-                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                            )
-                        }
-                        if (cancelled) {
-                            Text(
-                                text = "今天已停上",
-                                style = MiuixTheme.textStyles.footnote1,
-                                color = MiuixTheme.colorScheme.primary,
-                            )
-                        } else if (moved) {
-                            Text(
-                                text = "已调整节次/教室",
-                                style = MiuixTheme.textStyles.footnote1,
-                                color = MiuixTheme.colorScheme.primary,
-                            )
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(
-                                text = "调整",
-                                onClick = { editing = course to selectedDate },
-                            )
-                            TextButton(
-                                text = if (cancelled) "恢复" else "停上",
-                                onClick = {
-                                    val others = TempAdjustments.load(selectedDate).filter {
-                                        when (it) {
-                                            is TempAdjustments.Change.Cancel ->
-                                                it.courseId != course.id
-
-                                            is TempAdjustments.Change.Move ->
-                                                it.courseId != course.id
-
-                                            is TempAdjustments.Change.Add -> true
-                                        }
-                                    }
-                                    TempAdjustments.save(
-                                        selectedDate,
-                                        if (cancelled) {
-                                            others
-                                        } else {
-                                            others + TempAdjustments.Change.Cancel(course.id)
-                                        },
-                                    )
-                                    refreshKey++
-                                    onChanged()
-                                },
-                            )
-                        }
-                    }
-                }
-            }
-
-            item {
-                TextButton(
-                    text = "新增一节临时课",
+        item(key = "add") {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                insideMargin = PaddingValues(0.dp),
+            ) {
+                ArrowPreference(
+                    title = "新增一节临时课",
+                    summary = "只在${selectedDate.monthNumber}月${selectedDate.dayOfMonth}日生效",
                     onClick = { showAdd = true },
-                    modifier = Modifier.fillMaxWidth(),
                 )
             }
         }
+
+        item(key = "hint") {
+            Text(
+                text = "临时调整只影响选中的这一天，课表原数据不会被修改；" +
+                    "换一天会看到那一天自己的调整。",
+                style = MiuixTheme.textStyles.footnote2,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                modifier = Modifier.padding(horizontal = 4.dp),
+            )
+        }
+    }
     }
 
     TempAdjustDialog(
@@ -236,8 +208,7 @@ fun TempAdjustScreen(
         onDismiss = { editing = null },
         onSaved = {
             editing = null
-            refreshKey++
-            onChanged()
+            reload()
         },
     )
 
@@ -247,8 +218,7 @@ fun TempAdjustScreen(
         onDismiss = { showAdd = false },
         onSaved = {
             showAdd = false
-            refreshKey++
-            onChanged()
+            reload()
         },
     )
 }
@@ -263,8 +233,157 @@ private fun weekName(date: LocalDate): String = when (date.dayOfWeek.isoDayNumbe
     else -> "周日"
 }
 
+private fun dateLabel(date: LocalDate): String =
+    "${date.monthNumber}月${date.dayOfMonth}日 ${weekName(date)}"
+
 /**
- * 新增一节临时课：只在选中那天生效，不写进课表。
+ * 日期导航：一行里左「前一天」、中间日期、右「后一天」。
+ *
+ * 已经是今天时右按钮变成「今天」并禁用 —— 之前的实现里「后一天」在今天就跳不动，
+ * 看起来像按钮坏了；这里直接把状态说清楚。
+ */
+@Composable
+private fun DateNavCard(
+    date: LocalDate,
+    today: LocalDate,
+    changeCount: Int,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onToday: () -> Unit,
+) {
+    val isToday = date == today
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(
+                    text = "前一天",
+                    onClick = onPrevious,
+                    minWidth = 72.dp,
+                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = dateLabel(date),
+                        style = MiuixTheme.textStyles.title3,
+                        fontWeight = FontWeight.Medium,
+                        color = MiuixTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = when {
+                            changeCount > 0 -> "已调整 $changeCount 处"
+                            isToday -> "今天"
+                            else -> "无调整"
+                        },
+                        style = MiuixTheme.textStyles.footnote1,
+                        color = if (changeCount > 0) {
+                            MiuixTheme.colorScheme.primary
+                        } else {
+                            MiuixTheme.colorScheme.onSurfaceVariantSummary
+                        },
+                    )
+                }
+                TextButton(
+                    text = if (isToday) "今天" else "后一天",
+                    onClick = if (isToday) onToday else onNext,
+                    enabled = !isToday,
+                    minWidth = 72.dp,
+                )
+            }
+        }
+    }
+}
+
+/** 单节课的调整卡片：标题行 + 时间/地点 + 状态行 + 两个操作 */
+@Composable
+private fun CourseAdjustCard(
+    course: Course,
+    cancelled: Boolean,
+    moved: Boolean,
+    onAdjust: () -> Unit,
+    onToggleCancel: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Text(
+                    text = course.name,
+                    style = MiuixTheme.textStyles.body1.copy(fontSize = 17.sp),
+                    fontWeight = FontWeight.Medium,
+                    color = if (cancelled) {
+                        MiuixTheme.colorScheme.onSurfaceVariantSummary
+                    } else {
+                        MiuixTheme.colorScheme.onSurface
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = course.getTimeDisplayText(),
+                    style = MiuixTheme.textStyles.footnote1,
+                    color = MiuixTheme.colorScheme.primary,
+                    textAlign = TextAlign.End,
+                )
+            }
+
+            val detail = buildList {
+                if (course.classroom.isNotEmpty()) add(course.classroom)
+                if (course.teacher.isNotEmpty()) add(course.teacher)
+            }.joinToString(" | ")
+            if (detail.isNotEmpty()) {
+                Text(
+                    text = detail,
+                    style = MiuixTheme.textStyles.body2,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+
+            val status = when {
+                cancelled -> "今天已停上"
+                moved -> "已调整节次或教室"
+                else -> null
+            }
+            if (status != null) {
+                Text(
+                    text = status,
+                    style = MiuixTheme.textStyles.footnote1,
+                    color = MiuixTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                TextButton(
+                    text = "改时间 / 教室",
+                    onClick = onAdjust,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    text = if (cancelled) "恢复" else "停上",
+                    onClick = onToggleCancel,
+                    textColor = if (cancelled) {
+                        MiuixTheme.colorScheme.primary
+                    } else {
+                        MiuixTheme.colorScheme.onSurface
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 新增一节临时课。
  *
  * 教室可留空 —— 临时加的课经常只是「几点到哪里」，强制填全反而增加操作成本。
  */
@@ -276,24 +395,18 @@ private fun TempAdjustAddDialog(
     onSaved: () -> Unit,
 ) {
     if (!show) return
-    var name by remember { mutableStateOf("") }
-    var classroom by remember { mutableStateOf("") }
-    var startSection by remember { mutableIntStateOf(1) }
-    var endSection by remember { mutableIntStateOf(2) }
+    var name by remember(show) { mutableStateOf("") }
+    var classroom by remember(show) { mutableStateOf("") }
+    var startSection by remember(show) { mutableIntStateOf(1) }
+    var endSection by remember(show) { mutableIntStateOf(2) }
 
     OverlayDialog(
         title = "新增临时课",
+        summary = "只加在 ${dateLabel(date)}",
         show = true,
         onDismissRequest = onDismiss,
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            Text(
-                text = "${date.monthNumber}月${date.dayOfMonth}日 ${weekName(date)}",
-                style = MiuixTheme.textStyles.body2,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-            )
-            Spacer(Modifier.height(12.dp))
-
             NativeMiuixTextField(
                 value = name,
                 onValueChange = { name = it },
@@ -313,14 +426,17 @@ private fun TempAdjustAddDialog(
                 modifier = Modifier.fillMaxWidth(),
                 requestFocus = false,
             )
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(16.dp))
 
+            Text(
+                text = "节次",
+                style = MiuixTheme.textStyles.body2,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("节次", style = MiuixTheme.textStyles.body1)
                 NumberPicker(
                     value = startSection,
                     onValueChange = {
@@ -345,29 +461,35 @@ private fun TempAdjustAddDialog(
             }
             Spacer(Modifier.height(16.dp))
 
-            TextButton(
-                text = "添加",
-                onClick = {
-                    if (name.isBlank()) return@TextButton
-                    TempAdjustments.save(
-                        date,
-                        TempAdjustments.load(date) + TempAdjustments.Change.Add(
-                            name = name.trim(),
-                            classroom = classroom.trim(),
-                            startSection = startSection,
-                            endSection = endSection,
-                        ),
-                    )
-                    onSaved()
-                },
-                colors = ButtonDefaults.textButtonColorsPrimary(),
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-            )
-            TextButton(
-                text = "取消",
-                onClick = onDismiss,
-                modifier = Modifier.fillMaxWidth(),
-            )
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                TextButton(
+                    text = "取消",
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    text = "添加",
+                    onClick = {
+                        if (name.isBlank()) return@TextButton
+                        TempAdjustments.save(
+                            date,
+                            TempAdjustments.load(date) + TempAdjustments.Change.Add(
+                                name = name.trim(),
+                                classroom = classroom.trim(),
+                                startSection = startSection,
+                                endSection = endSection,
+                            ),
+                        )
+                        onSaved()
+                    },
+                    colors = ButtonDefaults.textButtonColorsPrimary(),
+                    enabled = name.isNotBlank(),
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
     }
 }
