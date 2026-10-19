@@ -852,5 +852,8 @@ fun AndroidCourseScheduleApp(privacyConsented: Boolean) {
             )
         },
         updateController = remember { AndroidUpdateController(context) },
+        // 共存版走自己的分发渠道，上游 release 装上去等于把 fork 功能整个换掉，
+        // 「更新设置」入口一并隐藏，免得用户点进去只看到永远没有更新。
+        showUpdateSettings = !com.haooz.chedule.BuildConfig.IS_FORK_BUILD,
     )
 }
