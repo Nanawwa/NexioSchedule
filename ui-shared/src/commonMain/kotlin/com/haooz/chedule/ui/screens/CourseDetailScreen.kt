@@ -33,6 +33,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -53,6 +54,7 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.haooz.chedule.data.Course
+import com.haooz.chedule.data.TempAdjustments
 import top.yukonga.miuix.kmp.layout.CollapsibleTopAppBar
 import com.haooz.chedule.ui.basic.LiquidTopBarButton
 import top.yukonga.miuix.kmp.layout.ProgressiveBlurTopBar
@@ -78,6 +80,11 @@ import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTitle
+import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
+import top.yukonga.miuix.kmp.basic.NumberPicker
+import top.yukonga.miuix.kmp.basic.NativeMiuixTextField
+import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.ChevronBackward
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -153,11 +160,16 @@ fun CourseDetailScreen(
     // 点击来源所在的周次（今日页=当前浏览日期所在周，bottomsheet=当前查看周），
     // 进入后自动滚动到对应周分组；<=0 表示不滚动。
     targetWeek: Int = 0,
+    /** 临时调课落盘后的回调：让宿主刷新提醒与小组件 */
+    onTempAdjusted: (() -> Unit)? = null,
     onBackStart: () -> Unit,
     onBack: () -> Unit,
 ) {
     val courseName = courses.firstOrNull()?.name ?: ""
     val sortedCourses = remember(courses) { courses.sortedBy { it.startWeek } }
+
+    // 临时调课的目标：某节课 + 它在这一行的具体日期
+    var tempAdjustTarget by remember { mutableStateOf<Pair<Course, LocalDate>?>(null) }
 
     // 预计算周分组，有序列表便于按索引定位自动滚动
     val weekGroups = remember(sortedCourses) {
@@ -652,6 +664,13 @@ fun CourseDetailScreen(
                                                                         )
                                                                     }
                                                                 }
+                                                                // 临时调课：只改这一天，课表原数据不动
+                                                                TextButton(
+                                                                    text = "调整",
+                                                                    onClick = {
+                                                                        tempAdjustTarget = course to courseDate
+                                                                    }
+                                                                )
                                                             }
                                                         }
                                                     }
@@ -664,6 +683,158 @@ fun CourseDetailScreen(
                         }
                 }
             }
+            TempAdjustDialog(
+                target = tempAdjustTarget,
+                onDismiss = { tempAdjustTarget = null },
+                onSaved = {
+                    tempAdjustTarget = null
+                    onTempAdjusted?.invoke()
+                },
+            )
+        }
+    }
+}
+
+/**
+ * 临时调课弹窗：只影响选中的那一天。
+ *
+ * 目前提供三种操作：本次停上、改教室、改节次。都写进 [TempAdjustments]，
+ * 课表原始数据一个字节都不改 —— 日期过去后自动失效，用户也可以手动恢复。
+ */
+@Composable
+private fun TempAdjustDialog(
+    target: Pair<Course, LocalDate>?,
+    onDismiss: () -> Unit,
+    onSaved: () -> Unit,
+) {
+    if (target == null) return
+    val course = target.first
+    val date = target.second
+    var classroom by remember(course.id, date) { mutableStateOf(course.classroom) }
+    var startSection by remember(course.id, date) { mutableIntStateOf(course.startSection) }
+    var endSection by remember(course.id, date) { mutableIntStateOf(course.endSection) }
+    val existing = remember(course.id, date) {
+        TempAdjustments.load(date)
+            .filterIsInstance<TempAdjustments.Change.Cancel>()
+            .any { it.courseId == course.id }
+    }
+
+    // 先摘掉这门课当天已有的规则再叠加，避免同一节课存下多条互相矛盾
+    fun commit(change: TempAdjustments.Change?) {
+        val others = TempAdjustments.load(date).filter {
+            when (it) {
+                is TempAdjustments.Change.Cancel -> it.courseId != course.id
+                is TempAdjustments.Change.Move -> it.courseId != course.id
+                is TempAdjustments.Change.Add -> true
+            }
+        }
+        TempAdjustments.save(date, if (change == null) others else others + change)
+        onSaved()
+    }
+
+    OverlayDialog(
+        title = "临时调整",
+        show = true,
+        onDismissRequest = onDismiss,
+        liquidGlassBackdrop = rememberLayerBackdrop(),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                text = "${date.monthNumber}月${date.dayOfMonth}日 · ${course.name}",
+                style = MiuixTheme.textStyles.body1,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+            Text(
+                text = "只改这一天，课表本身不动",
+                style = MiuixTheme.textStyles.body2,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                modifier = Modifier.padding(top = 4.dp, bottom = 16.dp),
+            )
+
+            if (existing) {
+                Text(
+                    text = "这节课今天已设为停上",
+                    style = MiuixTheme.textStyles.body2,
+                    color = MiuixTheme.colorScheme.primary,
+                    modifier = Modifier.padding(bottom = 12.dp),
+                )
+            }
+
+            NativeMiuixTextField(
+                value = classroom,
+                onValueChange = { classroom = it },
+                label = "教室",
+                useLabelAsPlaceholder = true,
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                requestFocus = false,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("节次", style = MiuixTheme.textStyles.body1)
+                NumberPicker(
+                    value = startSection,
+                    onValueChange = {
+                        startSection = it
+                        if (endSection < it) endSection = it
+                    },
+                    range = 1..12,
+                    visibleItemCount = 3,
+                    itemHeight = 40.dp,
+                    label = { "第${it}节" },
+                    modifier = Modifier.weight(1f),
+                )
+                NumberPicker(
+                    value = endSection,
+                    onValueChange = { if (it >= startSection) endSection = it },
+                    range = startSection..12,
+                    visibleItemCount = 3,
+                    itemHeight = 40.dp,
+                    label = { "第${it}节" },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+
+            TextButton(
+                text = "保存调整",
+                onClick = {
+                    val moved = startSection != course.startSection ||
+                        endSection != course.endSection ||
+                        classroom != course.classroom
+                    commit(
+                        if (moved) {
+                            TempAdjustments.Change.Move(
+                                courseId = course.id,
+                                startSection = startSection,
+                                endSection = endSection,
+                                classroom = classroom.ifBlank { null },
+                            )
+                        } else {
+                            null
+                        }
+                    )
+                },
+                colors = ButtonDefaults.textButtonColorsPrimary(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            TextButton(
+                text = if (existing) "恢复这节课" else "本次停上",
+                onClick = {
+                    commit(if (existing) null else TempAdjustments.Change.Cancel(course.id))
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            TextButton(
+                text = "取消",
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }

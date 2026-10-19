@@ -149,6 +149,7 @@ object DayScheduleResolver {
         sectionTimes: () -> Map<Int, String>,
         sectionCount: () -> Int,
         beforeExclusion: HolidayBeforeCourseExclusion = HolidayBeforeCourseExclusion(),
+        tempChanges: List<TempAdjustments.Change> = TempAdjustments.load(date),
     ): DayScheduleResolution {
         val dayResolution = HolidayCourseExclusion.resolveDayCourses(
             entriesByYear = entriesByYear,
@@ -160,7 +161,8 @@ object DayScheduleResolver {
             beforeExclusion = beforeExclusion,
         )
         return DayScheduleResolution(
-            courses = dayResolution.courses,
+            // 临时调课叠在节假日/调休解析之后：用户的临时改动优先级最高
+            courses = TempAdjustments.apply(dayResolution.courses, tempChanges),
             displayDayOfWeek = displayDayOfWeek,
             displayWeek = displayWeek,
             calendarDayOfWeek = calendarDayOfWeek,

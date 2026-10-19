@@ -5025,6 +5025,12 @@ fun CourseScheduleApp(
                     classStartTime = classStartTime,
                     teachingWeekReorganizations = teachingWeekRules,
                     targetWeek = detailTargetWeek,
+                    onTempAdjusted = {
+                        // 临时调课改了某天的课：重排提醒并刷新今日页/小组件。
+                        // 与节假日变更走同一条宿主副作用链路（都会改变「今天有哪些课」）。
+                        viewModel.reloadCourses()
+                        onHolidayDataChanged()
+                    },
                     onBackStart = {
                         detailExiting = true
                         coroutineScope.launch {
