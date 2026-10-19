@@ -100,10 +100,13 @@ fun TodaySnapshot.resolve(nowMillis: Long, nowMinuteOfDay: Double): WatchState {
     if (nextIndex < 0) return WatchState.Done
 
     val next = courses[nextIndex]
-    val isBreak = nextIndex > 0 && courses[nextIndex - 1].endMinute <= next.startMinute
+    // ⚠ courses[nextIndex - 1] 必须在 nextIndex > 0 时才算：早八之前 nextIndex == 0，
+    //   先取下标再 takeIf 会直接越界崩溃（-1 取不到元素，takeIf 的 lambda 根本轮不到）。
+    val previous = if (nextIndex > 0) courses[nextIndex - 1] else null
+    val isBreak = previous != null && previous.endMinute <= next.startMinute
     return if (isBreak) {
         WatchState.OnBreak(
-            previous = courses[nextIndex - 1],
+            previous = previous!!,
             next = next,
             remainToStartMillis = ((next.startMinute - nowMinuteOfDay) * 60_000L).toLong(),
         )

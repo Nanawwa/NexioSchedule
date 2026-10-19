@@ -148,6 +148,9 @@ fun UpdateSettingsScreen(
     var downloadedFile by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
+        // 不支持应用内更新的构建（共存 / 下游分发版）不该走到这页：入口已隐藏，
+        // 这里再兜一层，避免通过深链进入后触发一次注定失败的检查。
+        if (!updateController.isUpdateSupported) return@LaunchedEffect
         if (autoCheckUpdate) {
             val lastCheckDate = prefs.getString("last_check_date", "")
             val today = todayIsoDate()

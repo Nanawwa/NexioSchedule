@@ -11,6 +11,14 @@ interface UpdateController {
     /** 当前安装的版本号；取不到时为 `"未知"`。 */
     val currentVersion: String
 
+    /**
+     * 该构建是否支持应用内更新。
+     *
+     * 共存 / 下游分发版走自己的发布渠道，上游 release 的包名不同、装上去等于换掉整个
+     * 功能集，因此返回 false：调用方应同时跳过检查、清掉存量缓存并隐藏更新入口。
+     */
+    val isUpdateSupported: Boolean get() = true
+
     /** 检查更新。失败或无新版本时返回 `(false, null)`，不抛异常。 */
     fun checkForUpdate(source: String, channel: String): Pair<Boolean, UpdateRelease?>
 

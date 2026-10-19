@@ -83,6 +83,19 @@ fun UpdateDialog(
         val autoCheck = updatePrefs.getBoolean("auto_check_update", true)
         val updateReminder = updatePrefs.getBoolean("update_reminder", true)
 
+        // 该构建不支持应用内更新（共存 / 下游分发版）：连带清掉上一个构建留下的
+        // has_update / latest_tag 缓存，否则这里会读到旧值、在已经关掉更新的版本上弹窗。
+        if (!updateController.isUpdateSupported) {
+            if (updatePrefs.getBoolean("has_update", false)) {
+                updatePrefs.edit {
+                    putBoolean("has_update", false)
+                    putString("latest_tag", "")
+                    putString("latest_body", "")
+                }
+            }
+            return@LaunchedEffect
+        }
+
         if (!autoCheck) return@LaunchedEffect
 
         val today = todayLocalDate().toString()
