@@ -4,7 +4,9 @@ name: Build fork APKs
 on:
   push:
     branches:
+      - 'feat/**'
       - 'fork/**'
+      - 'master'
     tags:
       - 'v*-fork.*'
   workflow_dispatch:
