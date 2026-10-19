@@ -133,6 +133,15 @@ Complication 的主动刷新被系统限制在平均 5 分钟一次，自己刷�
 
 顺带修了一处会让共存版失效的问题：`TodayCoursesProvider` 的 authority 原来写死成 `com.haooz.chedule.courses`，而 manifest 里是 `${applicationId}.courses`。改包名后两者不一致，provider 会直接失效。现在从 `context.packageName` 推导，两边始终一致。
 
+### 共存版屏蔽上游更新
+
+换过 `applicationId` 的构建会置 `BuildConfig.IS_FORK_BUILD = true`，据此关掉两条更新路径：
+
+- `AndroidUpdateController.checkForUpdate()` 直接返回「没有更新」，不再请求上游 release 接口
+- 设置页的「更新设置」入口整个不渲染（复用 iOS 已有的 `showUpdateSettings` 开关）
+
+原因是上游 release 的 APK 包名是 `com.haooz.chedule`。共存版用户跟着提示装上去，得到的是一个和原版同包名的新 app：fork 独有的课间倒计时、临时调课、表盘数据源全部消失，还会和已装的原版抢同一个包名。入口留着也只会点进一个永远查不到更新的页面，索性一起隐藏。
+
 **来源**：本 fork 原创。
 
 ---
