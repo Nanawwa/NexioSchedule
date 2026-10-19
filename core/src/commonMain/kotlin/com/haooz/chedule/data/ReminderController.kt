@@ -107,6 +107,8 @@ interface ReminderController {
         const val KEY_IN_CLASS_TIMING_MODE = "in_class_timing_mode"
         /** 距下课分钟数 */
         const val KEY_IN_CLASS_LEAD_MINUTES = "in_class_lead_minutes"
+        /** 课间倒计时：下课到下一节上课之间显示距上课倒计时 */
+        const val KEY_BREAK_COUNTDOWN = "island_break_countdown_enabled"
 
         // —— 提醒时机档位（与 CourseReminderHelper.IN_CLASS_TIMING_* 同值）——
         const val IN_CLASS_TIMING_FULL = 0

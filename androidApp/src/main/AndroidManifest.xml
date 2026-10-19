@@ -138,6 +138,10 @@
             android:exported="false" />
 
         <receiver
+            android:name=".reminder.IslandBreakReceiver"
+            android:exported="false" />
+
+        <receiver
             android:name=".reminder.WidgetRefreshReceiver"
             android:exported="false" />
 

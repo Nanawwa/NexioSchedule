@@ -27,6 +27,7 @@ class IslandDismissReceiver : BroadcastReceiver() {
 
         // 测试岛与真实岛有独立 PREF，必须按 notificationId 选对应的 state，否则
         // 测试 dismiss 闹钟会清掉真实课的 state（反之亦然）。
+        // 课间岛的 startMillis 存的是课间开始（上一节下课），校验口径与课程态相同。
         val state = IslandNotificationHelper.IslandState.snapshotFor(context, notificationId)
 
         if (expectedStart > 0L) {

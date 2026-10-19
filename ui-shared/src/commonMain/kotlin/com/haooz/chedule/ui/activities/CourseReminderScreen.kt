@@ -213,13 +213,21 @@ fun CourseReminderScreen(
     var showInClassTimingDialog by remember { mutableStateOf(false) }
     var tempInClassTimingMode by remember { mutableIntStateOf(inClassTimingMode) }
     var tempInClassLeadMinutes by remember { mutableIntStateOf(inClassLeadMinutes) }
+    // 课间倒计时：下课到下一节上课之间显示距上课倒计时
+    var breakCountdownEnabled by remember {
+        mutableStateOf(reminderPrefs.getBoolean(ReminderController.KEY_BREAK_COUNTDOWN, false))
+    }
 
     val masterEnabled = preClassReminder || nextDayReminder
     // 总开关关闭时联动关掉子开关：勿扰 + 课中提醒（与下节课/次日提醒置 false 同一策略）
     val disableMasterDependentSwitches = {
         settingsViewModel.setClassDndEnabled(false)
         inClassEnabled = false
-        reminderPrefs.edit { putBoolean(ReminderController.KEY_IN_CLASS, false) }
+        breakCountdownEnabled = false
+        reminderPrefs.edit {
+            putBoolean(ReminderController.KEY_IN_CLASS, false)
+            putBoolean(ReminderController.KEY_BREAK_COUNTDOWN, false)
+        }
     }
     var permissionRefreshKey by remember { mutableIntStateOf(0) }
     // 电池优化 / 自启动设置页返回：重读「已忽略电池优化」并触发权限刷新
@@ -505,6 +513,21 @@ fun CourseReminderScreen(
                                     rlog("inclass_switch", "on=$it")
                                     inClassEnabled = it
                                     reminderPrefs.edit { putBoolean(ReminderController.KEY_IN_CLASS, it) }
+                                }
+                            )
+                            SwitchPreference(
+                                title = "课间倒计时",
+                                summary = "下课后接着显示距离下一节上课还有多久",
+                                checked = breakCountdownEnabled,
+                                enabled = masterEnabled,
+                                onCheckedChange = {
+                                    rlog("break_countdown_switch", "on=$it")
+                                    breakCountdownEnabled = it
+                                    reminderPrefs.edit {
+                                        putBoolean(ReminderController.KEY_BREAK_COUNTDOWN, it)
+                                    }
+                                    // 开关变化要重排下课闹钟，否则当天剩下的课不会补上
+                                    reminderController.startReminderService()
                                 }
                             )
                             AnimatedVisibility(

@@ -30,6 +30,8 @@ object IslandNotificationHelper {
     private const val KEY_ISLAND_EXPAND_GLOW_ENABLED = "island_expand_glow_enabled"
     // 课中提醒：到点后「已上课」替换为模板6进度卡片
     const val KEY_IN_CLASS_REMINDER = "island_in_class_enabled"
+    // 课间倒计时：下课到下一节上课之间挂一条倒计时岛，默认关
+    const val KEY_BREAK_COUNTDOWN = com.haooz.chedule.data.ReminderController.KEY_BREAK_COUNTDOWN
     // 官方必选：运营场景标识
     private const val BUSINESS_TAG = "course_reminder"
     // 官方 sequence：保证多次更新不乱序
@@ -44,9 +46,15 @@ object IslandNotificationHelper {
     // 课中提醒模板6 独立 ID：与「已上课」两条路径完全分开，不在同一条通知里 if/else
     const val ISLAND_IN_CLASS_NOTIFICATION_ID = 1005
     const val ISLAND_IN_CLASS_TEST_NOTIFICATION_ID = 5002
+    // 课间倒计时独立 ID：下课到下一节上课之间挂这条，与课中岛互不覆盖
+    const val ISLAND_BREAK_NOTIFICATION_ID = 1006
+    const val ISLAND_BREAK_TEST_NOTIFICATION_ID = 5003
     // 到点后由精确闹钟自动收起，不依赖每分钟对账
     const val ISLAND_STARTED_VISIBLE_MS = 15_000L
     private const val ISLAND_DISMISS_RC_BASE = 72000
+    // 课间岛收起单独一段：课间的起点是上一节下课，可能与别处某节课的上课同一分钟，
+    // 共用基址会让两条闹钟互相覆盖
+    private const val ISLAND_BREAK_DISMISS_RC_BASE = 74000
 
     private val scope = CoroutineScope(Dispatchers.IO)
     // 串行化 Shizuku bypass，避免并发导致 XMSF 网络状态错乱
@@ -74,6 +82,8 @@ object IslandNotificationHelper {
         private const val K_END_MILLIS = "end_millis"
         // 自定义时间课没有节次，section 里装的是时间范围，展示时必须跳过
         private const val K_CUSTOM_TIME = "custom_time"
+        // 课间岛：start/end 是课间的起止，不能当课程走「到点切已上课」那条分支
+        private const val K_IS_BREAK = "is_break"
 
         data class Snapshot(
             val notificationId: Int,
@@ -86,7 +96,8 @@ object IslandNotificationHelper {
             val endMillis: Long,
             val switched: Boolean,
             val switchedAt: Long,
-            val isCustomTime: Boolean
+            val isCustomTime: Boolean,
+            val isBreak: Boolean = false
         )
 
         private fun prefName(testMode: Boolean) = if (testMode) PREF_TEST else PREF
@@ -102,7 +113,8 @@ object IslandNotificationHelper {
             startMillis: Long,
             endMillis: Long,
             testMode: Boolean = false,
-            isCustomTime: Boolean = false
+            isCustomTime: Boolean = false,
+            isBreak: Boolean = false
         ) {
             context.getSharedPreferences(prefName(testMode), Context.MODE_PRIVATE).edit {
                 putBoolean(K_ACTIVE, true)
@@ -118,6 +130,7 @@ object IslandNotificationHelper {
                 putLong(K_START_MILLIS, startMillis)
                 putLong(K_END_MILLIS, endMillis)
                 putBoolean(K_CUSTOM_TIME, isCustomTime)
+                putBoolean(K_IS_BREAK, isBreak)
             }
         }
 
@@ -137,7 +150,8 @@ object IslandNotificationHelper {
                 endMillis = p.getLong(K_END_MILLIS, 0L),
                 switched = p.getBoolean(K_SWITCHED, false),
                 switchedAt = p.getLong(K_SWITCHED_AT, 0L),
-                isCustomTime = p.getBoolean(K_CUSTOM_TIME, false)
+                isCustomTime = p.getBoolean(K_CUSTOM_TIME, false),
+                isBreak = p.getBoolean(K_IS_BREAK, false)
             )
         }
 
@@ -302,11 +316,12 @@ object IslandNotificationHelper {
         manager.createNotificationChannel(channel)
     }
 
-    // 测试岛含倒计时/已上课/课中三个 ID
+    // 测试岛含倒计时/已上课/课中/课间四个 ID
     fun isIslandTestId(notificationId: Int): Boolean =
         notificationId == ISLAND_TEST_NOTIFICATION_ID ||
             notificationId == ISLAND_STARTED_TEST_NOTIFICATION_ID ||
-            notificationId == ISLAND_IN_CLASS_TEST_NOTIFICATION_ID
+            notificationId == ISLAND_IN_CLASS_TEST_NOTIFICATION_ID ||
+            notificationId == ISLAND_BREAK_TEST_NOTIFICATION_ID
 
     // 到点后：未开课中提醒 → 已上课 ID；开了 → 课中 ID
     fun activeIdFor(notificationId: Int, inClass: Boolean): Int = when {
@@ -318,19 +333,40 @@ object IslandNotificationHelper {
 
     // 倒计时态使用的 ID（切换前用它收起可能卡在 00:00 的倒计时岛）
     fun countdownIdFor(notificationId: Int): Int = when (notificationId) {
-        ISLAND_STARTED_TEST_NOTIFICATION_ID, ISLAND_IN_CLASS_TEST_NOTIFICATION_ID -> ISLAND_TEST_NOTIFICATION_ID
-        ISLAND_STARTED_NOTIFICATION_ID, ISLAND_IN_CLASS_NOTIFICATION_ID -> ISLAND_NOTIFICATION_ID
+        ISLAND_STARTED_TEST_NOTIFICATION_ID, ISLAND_IN_CLASS_TEST_NOTIFICATION_ID,
+        ISLAND_BREAK_TEST_NOTIFICATION_ID -> ISLAND_TEST_NOTIFICATION_ID
+        ISLAND_STARTED_NOTIFICATION_ID, ISLAND_IN_CLASS_NOTIFICATION_ID,
+        ISLAND_BREAK_NOTIFICATION_ID -> ISLAND_NOTIFICATION_ID
         else -> notificationId
     }
 
     // 同一门课可能并存的岛态 ID
     fun siblingIdsFor(notificationId: Int): IntArray = when (notificationId) {
-        ISLAND_NOTIFICATION_ID -> intArrayOf(ISLAND_STARTED_NOTIFICATION_ID, ISLAND_IN_CLASS_NOTIFICATION_ID)
-        ISLAND_STARTED_NOTIFICATION_ID -> intArrayOf(ISLAND_NOTIFICATION_ID, ISLAND_IN_CLASS_NOTIFICATION_ID)
-        ISLAND_IN_CLASS_NOTIFICATION_ID -> intArrayOf(ISLAND_NOTIFICATION_ID, ISLAND_STARTED_NOTIFICATION_ID)
-        ISLAND_TEST_NOTIFICATION_ID -> intArrayOf(ISLAND_STARTED_TEST_NOTIFICATION_ID, ISLAND_IN_CLASS_TEST_NOTIFICATION_ID)
-        ISLAND_STARTED_TEST_NOTIFICATION_ID -> intArrayOf(ISLAND_TEST_NOTIFICATION_ID, ISLAND_IN_CLASS_TEST_NOTIFICATION_ID)
-        ISLAND_IN_CLASS_TEST_NOTIFICATION_ID -> intArrayOf(ISLAND_TEST_NOTIFICATION_ID, ISLAND_STARTED_TEST_NOTIFICATION_ID)
+        ISLAND_NOTIFICATION_ID -> intArrayOf(
+            ISLAND_STARTED_NOTIFICATION_ID, ISLAND_IN_CLASS_NOTIFICATION_ID, ISLAND_BREAK_NOTIFICATION_ID
+        )
+        ISLAND_STARTED_NOTIFICATION_ID -> intArrayOf(
+            ISLAND_NOTIFICATION_ID, ISLAND_IN_CLASS_NOTIFICATION_ID, ISLAND_BREAK_NOTIFICATION_ID
+        )
+        ISLAND_IN_CLASS_NOTIFICATION_ID -> intArrayOf(
+            ISLAND_NOTIFICATION_ID, ISLAND_STARTED_NOTIFICATION_ID, ISLAND_BREAK_NOTIFICATION_ID
+        )
+        ISLAND_BREAK_NOTIFICATION_ID -> intArrayOf(
+            ISLAND_NOTIFICATION_ID, ISLAND_STARTED_NOTIFICATION_ID, ISLAND_IN_CLASS_NOTIFICATION_ID
+        )
+        ISLAND_TEST_NOTIFICATION_ID -> intArrayOf(
+            ISLAND_STARTED_TEST_NOTIFICATION_ID, ISLAND_IN_CLASS_TEST_NOTIFICATION_ID,
+            ISLAND_BREAK_TEST_NOTIFICATION_ID
+        )
+        ISLAND_STARTED_TEST_NOTIFICATION_ID -> intArrayOf(
+            ISLAND_TEST_NOTIFICATION_ID, ISLAND_IN_CLASS_TEST_NOTIFICATION_ID, ISLAND_BREAK_TEST_NOTIFICATION_ID
+        )
+        ISLAND_IN_CLASS_TEST_NOTIFICATION_ID -> intArrayOf(
+            ISLAND_TEST_NOTIFICATION_ID, ISLAND_STARTED_TEST_NOTIFICATION_ID, ISLAND_BREAK_TEST_NOTIFICATION_ID
+        )
+        ISLAND_BREAK_TEST_NOTIFICATION_ID -> intArrayOf(
+            ISLAND_TEST_NOTIFICATION_ID, ISLAND_STARTED_TEST_NOTIFICATION_ID, ISLAND_IN_CLASS_TEST_NOTIFICATION_ID
+        )
         else -> intArrayOf()
     }
 
@@ -347,9 +383,11 @@ object IslandNotificationHelper {
         manager.cancel(ISLAND_NOTIFICATION_ID)
         manager.cancel(ISLAND_STARTED_NOTIFICATION_ID)
         manager.cancel(ISLAND_IN_CLASS_NOTIFICATION_ID)
+        manager.cancel(ISLAND_BREAK_NOTIFICATION_ID)
         manager.cancel(ISLAND_TEST_NOTIFICATION_ID)
         manager.cancel(ISLAND_STARTED_TEST_NOTIFICATION_ID)
         manager.cancel(ISLAND_IN_CLASS_TEST_NOTIFICATION_ID)
+        manager.cancel(ISLAND_BREAK_TEST_NOTIFICATION_ID)
     }
 
     // courseStartMillis 是课程开始时间的唯一真源，倒计时/文案/已上课态都由它派生
@@ -747,6 +785,163 @@ object IslandNotificationHelper {
         return json.toString()
     }
 
+    /**
+     * 课间岛的 param 构建。结构与课中岛一致，只把「距离下课」换成「距离上课」。
+     *
+     * 倒计时同样交给系统 Chronometer 自刷，App 不按秒重推：课间通常只有 5~20 分钟，
+     * 每分钟重推会让岛反复弹悬浮窗，且真机上 Chronometer 比 App 定时更稳。
+     */
+    private fun buildBreakIslandParamsJson(
+        context: Context,
+        nextCourseName: String,
+        nextClassroom: String,
+        nextSection: String,
+        nextStartTime: String,
+        breakEndMillis: Long,
+    ): String {
+        val json = JSONObject()
+        val prefs = context.getSharedPreferences("course_reminder_prefs", Context.MODE_PRIVATE)
+        val expandGlowEnabled = prefs.getBoolean(KEY_ISLAND_EXPAND_GLOW_ENABLED, true)
+        val aodMode = prefs.getInt("island_aod_mode", 0)
+
+        val now = System.currentTimeMillis()
+        val counting = breakEndMillis > now
+        val shortClassroom = prefs.shortClassroom(nextClassroom)
+        val aodTitle = if (aodMode == 1) {
+            shortClassroom.ifEmpty { nextCourseName }
+        } else {
+            nextCourseName
+        }
+
+        val paramV2 = JSONObject().apply {
+            put("business", BUSINESS_TAG)
+            put("protocol", 1)
+            put("islandFirstFloat", true)
+            put("enableFloat", false)
+            put("updatable", true)
+            put("outEffectSrc", if (expandGlowEnabled) "outer_glow" else "")
+            put("reopen", "reopen")
+            put("sequence", sequenceCounter.incrementAndGet())
+            put("aodTitle", aodTitle)
+
+            put("baseInfo", JSONObject().apply {
+                put("type", 2)
+                put("title", "课间")
+                put("content", if (nextStartTime.isNotEmpty()) "$nextCourseName $nextStartTime" else nextCourseName)
+                put("subTitle", "")
+                put("extraTitle", "")
+                put("specialTitle", "")
+                put("subContent", "")
+                put("picFunction", "")
+                put("showDivider", true)
+                put("showContentDivider", false)
+                put("colorTitle", "#111111")
+                put("colorTitleDark", "#ffffff")
+                put("colorContent", "#333333")
+                put("colorContentDark", "#cccccc")
+            })
+
+            put("picInfo", JSONObject().apply {
+                put("type", 1)
+                put("pic", "")
+            })
+
+            put("hintInfo", JSONObject().apply {
+                put("type", 2)
+                put("content", if (counting) "距离上课" else "已上课")
+                put("title", "")
+                put("timerInfo", JSONObject().apply {
+                    if (counting) {
+                        put("timerType", -1)
+                        put("timerWhen", breakEndMillis)
+                        put("timerTotal", 0L)
+                        put("timerSystemCurrent", now)
+                    } else {
+                        put("timerType", 0)
+                        put("timerWhen", 0)
+                        put("timerTotal", 0)
+                        put("timerSystemCurrent", 0)
+                    }
+                })
+                put("subContent", "地点")
+                put("subTitle", shortClassroom)
+                put("colorContent", "#666666")
+                put("colorContentDark", "#aaaaaa")
+                put("colorTitle", "#222222")
+                put("colorTitleDark", "#eeeeee")
+                put("colorSubContent", "#666666")
+                put("colorSubContentDark", "#aaaaaa")
+                put("colorSubTitle", "#222222")
+                put("colorSubTitleDark", "#eeeeee")
+                put("actionInfo", JSONObject().apply {
+                    put("actionTitle", "查看课表")
+                    put("actionIntentType", 1)
+                    put(
+                        "actionIntent",
+                        "intent:#Intent;component=${context.packageName}/.ui.activities.MainActivity;" +
+                            "launchFlags=0x14000000;end"
+                    )
+                })
+            })
+
+            put("param_island", JSONObject().apply {
+                put("islandProperty", 1)
+                put("islandTimeout", 3600)
+                put("bigIslandArea", JSONObject().apply {
+                    put("templateNo", 2)
+                    // A区：下一节课程名
+                    put("imageTextInfoLeft", JSONObject().apply {
+                        put("type", 1)
+                        put("textInfo", JSONObject().apply {
+                            put("title", nextCourseName)
+                            put("content", "")
+                            put("showHighlightColor", false)
+                            put("narrowFont", false)
+                        })
+                    })
+                    // B区：距上课倒计时，与课中岛同一套 sameWidthDigitInfo
+                    if (counting) {
+                        put("sameWidthDigitInfo", JSONObject().apply {
+                            put("content", "上课")
+                            put("showHighlightColor", false)
+                            put("timerInfo", JSONObject().apply {
+                                put("timerType", -1)
+                                put("timerWhen", breakEndMillis)
+                                put("timerTotal", 0L)
+                                put("timerSystemCurrent", now)
+                            })
+                        })
+                        put("textInfo", JSONObject().apply {
+                            put("frontTitle", "")
+                            put("title", "")
+                            put("content", "")
+                            put("showHighlightColor", false)
+                            put("narrowFont", false)
+                        })
+                    } else {
+                        put("textInfo", JSONObject().apply {
+                            put("frontTitle", "")
+                            put("title", "已上课")
+                            put("content", "")
+                            put("showHighlightColor", false)
+                            put("narrowFont", false)
+                        })
+                    }
+                })
+                put("smallIslandArea", JSONObject().apply {
+                    put("picInfo", JSONObject().apply {
+                        put("type", 1)
+                        put("pic", "miui.focus.pic_small")
+                        put("picDark", "miui.focus.pic_small_dark")
+                    })
+                })
+            })
+        }
+
+        json.put("param_v2", paramV2)
+        return json.toString()
+    }
+
     fun sendIslandNotification(
         context: Context,
         notificationId: Int,
@@ -852,9 +1047,11 @@ object IslandNotificationHelper {
             return
         }
 
-        // 上一节残留的「已上课 / 课中」岛先收起，避免与本次倒计时岛并存
+        // 上一节残留的「已上课 / 课中 / 课间」岛先收起，避免与本次倒计时岛并存。
+        // 课间倒计时结束前若已进入本节课前提醒窗口，这里是让位点。
         cancelIslandState(context, ISLAND_STARTED_NOTIFICATION_ID)
         cancelIslandState(context, ISLAND_IN_CLASS_NOTIFICATION_ID)
+        cancelIslandState(context, ISLAND_BREAK_NOTIFICATION_ID)
 
         // 供每分钟对账使用（闹钟丢失时也能正确切换/收起）
         IslandState.save(
@@ -903,12 +1100,15 @@ object IslandNotificationHelper {
         // 测试课：课前 1 分 10 秒倒计时 + 课中 2 分钟
         val courseStartTimestamp = System.currentTimeMillis() + 70_000L
         val courseEndTimestamp = courseStartTimestamp + 120_000L
+        // 下课后接一段课间，让测试一次跑完「倒计时 → 上课 → 课间」三段
+        val breakEndTimestamp = courseEndTimestamp + 90_000L
         val startTime = formatClock(courseStartTimestamp)
         val endTime = formatClock(courseEndTimestamp)
 
-        // 清掉上一轮测试的「已上课 / 课中」岛，避免与本次倒计时岛并存
+        // 清掉上一轮测试的「已上课 / 课中 / 课间」岛，避免与本次倒计时岛并存
         cancelIslandState(context, ISLAND_STARTED_TEST_NOTIFICATION_ID)
         cancelIslandState(context, ISLAND_IN_CLASS_TEST_NOTIFICATION_ID)
+        cancelIslandState(context, ISLAND_BREAK_TEST_NOTIFICATION_ID)
         // 测试岛写独立 PREF，不污染真实课前提醒 state
         IslandState.save(
             context = context,
@@ -996,6 +1196,27 @@ object IslandNotificationHelper {
             courseStartMillis = courseStartTimestamp,
             notificationId = testNotificationId
         )
+        // 下课瞬间接课间岛：内容由闹钟自带（测试课表里查不到下一节）
+        if (isBreakCountdownEnabled(context)) {
+            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+            val breakIntent = Intent(context, IslandBreakReceiver::class.java).apply {
+                putExtra(IslandBreakReceiver.EXTRA_NOTIFICATION_ID, testNotificationId)
+                putExtra(IslandBreakReceiver.EXTRA_COURSE_END_MILLIS, courseEndTimestamp)
+                putExtra(IslandBreakReceiver.EXTRA_NEXT_COURSE_NAME, "高等数学")
+                putExtra(IslandBreakReceiver.EXTRA_NEXT_CLASSROOM, "博A302")
+                putExtra(IslandBreakReceiver.EXTRA_NEXT_SECTION, "第5-6节")
+                putExtra(IslandBreakReceiver.EXTRA_NEXT_START_MILLIS, breakEndTimestamp)
+            }
+            val breakPending = PendingIntent.getBroadcast(
+                context,
+                ISLAND_DISMISS_RC_BASE + 1,
+                breakIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            CourseReminderHelper.setCourseBoundaryAlarm(
+                alarmManager, courseEndTimestamp, breakPending
+            )
+        }
         // 测试岛也要进刷新链，否则课中 ticker/对账在进程被杀后无人驱动
         kickWidgetRefresh(context)
     }
@@ -1185,6 +1406,116 @@ object IslandNotificationHelper {
         kickWidgetRefresh(context)
     }
 
+    /**
+     * 课间倒计时岛：下课到下一节上课之间挂这条。
+     *
+     * 与课中岛用不同通知 ID，两条互不覆盖。到下一节上课时间由精确闹钟收起，
+     * 并对账链兜底：闹钟丢了也不会让岛停在 00:00。
+     */
+    fun sendBreakIslandNotification(
+        context: Context,
+        nextCourseName: String,
+        nextClassroom: String,
+        nextSection: String,
+        nextStartTime: String,
+        breakStartMillis: Long,
+        breakEndMillis: Long,
+        testMode: Boolean = false,
+    ) {
+        if (!isIslandSupported(context)) return
+        if (breakEndMillis <= System.currentTimeMillis()) return
+
+        val breakId = if (testMode) ISLAND_BREAK_TEST_NOTIFICATION_ID else ISLAND_BREAK_NOTIFICATION_ID
+        // 课间开始前先把上一条课中岛收掉，否则会同时挂两条
+        cancelIslandState(context, breakId)
+
+        // 存进同一份 state：进程被杀后由每分钟对账接管，到点自动收起
+        IslandState.save(
+            context = context,
+            notificationId = breakId,
+            courseName = nextCourseName,
+            classroom = nextClassroom,
+            section = nextSection,
+            startTime = nextStartTime,
+            endTime = "",
+            startMillis = breakStartMillis,
+            endMillis = breakEndMillis,
+            testMode = testMode,
+            isBreak = true
+        )
+
+        val params = buildBreakIslandParamsJson(
+            context = context,
+            nextCourseName = nextCourseName,
+            nextClassroom = nextClassroom,
+            nextSection = nextSection,
+            nextStartTime = nextStartTime,
+            breakEndMillis = breakEndMillis,
+        )
+
+        sendIslandNotification(
+            context = context,
+            notificationId = breakId,
+            title = if (nextStartTime.isNotEmpty()) "课间 · $nextStartTime 上课" else "课间",
+            content = buildString {
+                if (nextCourseName.isNotEmpty()) append(nextCourseName)
+                if (nextClassroom.isNotEmpty()) {
+                    if (isNotEmpty()) append(" ")
+                    append(nextClassroom)
+                }
+            },
+            courseName = nextCourseName,
+            section = nextSection,
+            startTime = nextStartTime,
+            endTime = "",
+            classroom = nextClassroom,
+            testMode = testMode,
+            useShizukuBypass = true,
+            islandParamsOverride = params,
+        )
+
+        // 课间岛到上课时刻就让位：那一刻课前倒计时/上课提醒要接上来，
+        // 再留 15 秒会把新岛覆盖掉
+        scheduleIslandDismissAt(
+            context = context,
+            notificationId = breakId,
+            courseStartMillis = breakStartMillis,
+            triggerAtMillis = breakEndMillis,
+            breakIsland = true,
+        )
+        kickWidgetRefresh(context)
+    }
+
+    /** 课间倒计时是否开启。与课中提醒同一个总开关下的独立子开关。 */
+    fun isBreakCountdownEnabled(context: Context): Boolean {
+        val prefs = context.getSharedPreferences("course_reminder_prefs", Context.MODE_PRIVATE)
+        return prefs.getBoolean(KEY_BREAK_COUNTDOWN, false)
+    }
+
+    /**
+     * 课间岛测试：造一段 90 秒的课间，下一节用固定样例课。
+     *
+     * 真实课表里要等一节课下课才能看到效果，测试入口给一条能立刻验证的路径。
+     */
+    fun sendTestBreakIslandNotification(context: Context) {
+        if (!isIslandSupported(context)) {
+            NexioLog.w(TAG, "Island not supported on this device")
+            return
+        }
+        val now = System.currentTimeMillis()
+        val breakEnd = now + 90_000L
+        sendBreakIslandNotification(
+            context = context,
+            nextCourseName = "大学英语Ⅱ",
+            nextClassroom = "博A201",
+            nextSection = "第3-4节",
+            nextStartTime = formatClock(breakEnd),
+            breakStartMillis = now,
+            breakEndMillis = breakEnd,
+            testMode = true,
+        )
+        kickWidgetRefresh(context)
+    }
     // 距下一次「剩余分钟」跳变的毫秒数；小组件刷新链仍按分钟对账
     fun msUntilNextMinuteBoundary(remainMs: Long): Long {
         val toBoundary = remainMs % 60_000L
@@ -1245,15 +1576,16 @@ object IslandNotificationHelper {
         context: Context,
         notificationId: Int,
         courseStartMillis: Long,
-        triggerAtMillis: Long
+        triggerAtMillis: Long,
+        breakIsland: Boolean = false
     ) {
         val intent = Intent(context, IslandDismissReceiver::class.java).apply {
             putExtra(IslandDismissReceiver.EXTRA_NOTIFICATION_ID, notificationId)
             putExtra(IslandDismissReceiver.EXTRA_COURSE_START_MILLIS, courseStartMillis)
         }
         // 自纪元起的分钟数 mod 100000：同分钟开始的课不会撞号
-        val rc = ISLAND_DISMISS_RC_BASE +
-            kotlin.math.abs((courseStartMillis / 60_000L % 100_000L).toInt())
+        val base = if (breakIsland) ISLAND_BREAK_DISMISS_RC_BASE else ISLAND_DISMISS_RC_BASE
+        val rc = base + kotlin.math.abs((courseStartMillis / 60_000L % 100_000L).toInt())
         val pendingIntent = PendingIntent.getBroadcast(
             context, rc, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE

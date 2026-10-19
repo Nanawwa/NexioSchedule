@@ -24,6 +24,7 @@ import androidx.core.content.edit
 import com.haooz.chedule.R
 import com.haooz.chedule.data.Course
 import com.haooz.chedule.data.CourseRepository
+import com.haooz.chedule.data.BreakCountdown
 import com.haooz.chedule.data.CourseScheduleDateBounds
 import com.haooz.chedule.data.CourseTimeSpan
 import com.haooz.chedule.data.DayScheduleResolver
@@ -102,6 +103,7 @@ object CourseReminderHelper {
 
     // 每门课互不覆盖：RC = BASE + course.id.hashCode()
     private const val ISLAND_EXPAND_RC_BASE = 70000
+    private const val ISLAND_BREAK_RC_BASE = 60000
 
     // 超过该滞后视为隔夜/重启残留，直接收起而不是补一个过期的上课态
     private const val ISLAND_LATE_TOLERANCE_MS = 5 * 60_000L
@@ -198,6 +200,7 @@ object CourseReminderHelper {
     private const val PREF_ALARM_REGISTRY = "reminder_alarm_registry"
     private const val KEY_PRE_CLASS_RCS = "pre_class_rcs"
     private const val KEY_EXPAND_RCS = "expand_rcs"
+    private const val KEY_BREAK_RCS = "break_rcs"
     private const val PI_FLAGS = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
 
     private fun readRcSet(context: Context, key: String): Set<Int> {
@@ -604,8 +607,53 @@ object CourseReminderHelper {
         if (repository.getNextDayReminder()) {
             scheduleNextDayAlarm(context, repository, alarmManager)
         }
+        // 课间倒计时独立于课中提醒：课中岛没开也要能在下课时挂出距上课倒计时
+        scheduleBreakAlarms(context, repository, alarmManager)
         ClassDndHelper.scheduleClassDndAlarms(context, alarmManager)
     }
+
+    /**
+     * 每个课间的开始时刻各排一个闹钟，用来把岛换成课间倒计时。
+     *
+     * 按 [BreakCountdown.breaks] 的实际课间枚举，不用「除最后一节外都排」那种近似：
+     * 课表允许时间重叠，拖到后面的课会让最后一节开始得晚、结束得早。
+     */
+    private fun scheduleBreakAlarms(
+        context: Context,
+        repository: CourseRepository,
+        alarmManager: AlarmManager
+    ) {
+        if (!IslandNotificationHelper.isBreakCountdownEnabled(context)) {
+            writeRcSet(context, KEY_BREAK_RCS, emptySet())
+            return
+        }
+        val now = System.currentTimeMillis()
+        val breaks = BreakCountdown.breaks(
+            courses = getTodayCourses(context),
+            sectionTimes = repository.getCurrentSectionTimes(),
+            dayStartMillis = todayMillis(0, 0),
+        ).filter { it.startMillis > now }
+
+        val scheduledRcs = mutableSetOf<Int>()
+        for (breakNow in breaks) {
+            val intent = Intent(context, IslandBreakReceiver::class.java).apply {
+                putExtra(IslandBreakReceiver.EXTRA_NOTIFICATION_ID, ISLAND_NOTIFICATION_ID)
+                putExtra(IslandBreakReceiver.EXTRA_COURSE_END_MILLIS, breakNow.startMillis)
+            }
+            val rc = breakRequestCode(breakNow.startMillis)
+            val pendingIntent = PendingIntent.getBroadcast(
+                context, rc, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            setCourseBoundaryAlarm(alarmManager, breakNow.startMillis, pendingIntent)
+            scheduledRcs.add(rc)
+        }
+        writeRcSet(context, KEY_BREAK_RCS, scheduledRcs)
+    }
+
+    private fun breakRequestCode(breakStartMillis: Long): Int =
+        ISLAND_BREAK_RC_BASE +
+            kotlin.math.abs((breakStartMillis / 60_000L % 100_000L).toInt())
 
     private fun cancelAllAlarms(context: Context, alarmManager: AlarmManager) {
         // 先按登记表取消，覆盖已删除/已换 ID 的孤儿闹钟
@@ -616,6 +664,14 @@ object CourseReminderHelper {
             alarmManager.cancel(pendingIntent)
         }
         writeRcSet(context, KEY_PRE_CLASS_RCS, emptySet())
+
+        for (rc in readRcSet(context, KEY_BREAK_RCS)) {
+            val pendingIntent = PendingIntent.getBroadcast(
+                context, rc, Intent(context, IslandBreakReceiver::class.java), PI_FLAGS
+            )
+            alarmManager.cancel(pendingIntent)
+        }
+        writeRcSet(context, KEY_BREAK_RCS, emptySet())
 
         val allCourses = CourseRepository().getAllCourses()
         for (course in allCourses) {
@@ -841,6 +897,7 @@ object CourseReminderHelper {
         val todayCourses = getTodayCourses(context)
 
         // 倒计时/岛激活时需每分钟刷新，便于更新文案与对账补切
+        // （课间岛与课程岛共用同一份 state，isActiveAny 已覆盖）
         val countdownPrefs = context.getSharedPreferences("countdown_state", Context.MODE_PRIVATE)
         val hasActiveCountdown = countdownPrefs.getBoolean("active", false) ||
             IslandNotificationHelper.IslandState.isActiveAny(context)
@@ -1151,7 +1208,8 @@ object CourseReminderHelper {
         }
 
         val islandState = IslandNotificationHelper.IslandState.snapshot(context, testMode = false)
-        if (islandState != null && islandState.endMillis > now && !isResolvedCourse(
+        // 课间岛的 start/end 是课间起止，不是某节课，用课程口径校验必然「查不到」
+        if (islandState != null && !islandState.isBreak && islandState.endMillis > now && !isResolvedCourse(
                 context = context,
                 repository = repository,
                 startMillis = islandState.startMillis,
@@ -1193,6 +1251,21 @@ object CourseReminderHelper {
 
     fun getTodayCourses(context: Context): List<Course> =
         resolveDaySchedule(context, forTomorrow = false).courses
+
+    /**
+     * 当前所在的课间（上一节已下课、下一节还没上课）。不在课间返回 null。
+     *
+     * 只认今天的课表：跨午夜的那条尾巴属于昨天那节课，课间判断交给次日重新解析。
+     */
+    fun findCurrentBreak(context: Context): BreakCountdown.Break? {
+        val repository = CourseRepository()
+        return BreakCountdown.find(
+            courses = getTodayCourses(context),
+            sectionTimes = repository.getCurrentSectionTimes(),
+            dayStartMillis = todayMillis(0, 0),
+            nowMillis = System.currentTimeMillis(),
+        )
+    }
 
     fun findNextCourseToday(context: Context): Course? {
         val repository = CourseRepository()
@@ -1975,6 +2048,16 @@ object CourseReminderHelper {
         val state = IslandNotificationHelper.IslandState.snapshot(context, testMode) ?: return
         val now = System.currentTimeMillis()
 
+        // 课间岛：只在课间内保留，到点直接收起，不走下面「到点切已上课」那套
+        if (state.isBreak) {
+            if (now >= state.endMillis) {
+                IslandNotificationHelper.cancelIslandState(context, state.notificationId)
+                IslandNotificationHelper.IslandState.clear(context, testMode)
+                NexioLog.d(TAG, "reconcileIsland: break over test=$testMode")
+            }
+            return
+        }
+
         val inClassEnabled = IslandNotificationHelper.isInClassReminderEnabled(context)
         // 课中开启：不按 15 秒「已上课」收起；对账只负责进课中/刷进度/下课收起
         val keepForInClass = inClassEnabled && state.endMillis > now
@@ -1985,6 +2068,8 @@ object CourseReminderHelper {
         val expiredByShow = !inClassEnabled && state.switched &&
             now - state.switchedAt >= IslandNotificationHelper.ISLAND_STARTED_VISIBLE_MS
         if (expiredByEnd || expiredByShow) {
+            // 下课：有课间就换成课间倒计时，没有（连堂/当天最后一节）才收起
+            if (expiredByEnd && handOffToBreak(context, testMode)) return
             // 连带收起另一半（倒计时/已上课），避免残留岛一直停在 00:00
             IslandNotificationHelper.cancelIslandState(context, state.notificationId)
             IslandNotificationHelper.IslandState.clear(context, testMode)
@@ -2058,6 +2143,43 @@ object CourseReminderHelper {
         }
     }
 
+    /**
+     * 课前提醒的提前量是否已经盖住整个课间。
+     *
+     * 盖住时课前倒计时岛会在下课那一刻准时发出，内容和课间岛是同一件事（都在数还有多久上课），
+     * 再发一条只会互相覆盖，所以课间岛让位。
+     */
+    private fun preClassCoversBreak(repository: CourseRepository, breakNow: BreakCountdown.Break): Boolean {
+        if (!repository.getPreClassReminder()) return false
+        val leadMillis = repository.getPreClassReminderMinutes() * 60_000L
+        return breakNow.endMillis - leadMillis <= breakNow.startMillis
+    }
+
+    // 下课换成课间倒计时。返回 true 表示已接管，调用方不要再收起岛。
+    private fun handOffToBreak(context: Context, testMode: Boolean): Boolean {
+        if (!IslandNotificationHelper.isBreakCountdownEnabled(context)) return false
+        // 测试课表里没有「下一节」，测试流程自己造数据，这里只处理真实课
+        if (testMode) return false
+        val breakNow = findCurrentBreak(context) ?: return false
+        val repository = CourseRepository()
+        if (preClassCoversBreak(repository, breakNow)) {
+            NexioLog.d(TAG, "reconcileIsland: break covered by pre-class reminder")
+            return false
+        }
+        IslandNotificationHelper.sendBreakIslandNotification(
+            context = context,
+            nextCourseName = breakNow.next.name,
+            nextClassroom = breakNow.next.classroom,
+            nextSection = breakNow.next.getSectionText(),
+            nextStartTime = getCourseStartTime(breakNow.next, repository).orEmpty(),
+            breakStartMillis = breakNow.startMillis,
+            breakEndMillis = breakNow.endMillis,
+            testMode = false,
+        )
+        NexioLog.d(TAG, "reconcileIsland: hand off to break until ${breakNow.endMillis}")
+        return true
+    }
+
     // 关闭提醒时清理实况/岛残留
     fun cancelAllReminderNotifications(context: Context) {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -2077,6 +2199,7 @@ object CourseReminderHelper {
         }
         IslandNotificationHelper.cancelIslandNotifications(context)
         IslandNotificationHelper.IslandState.clear(context)
+        IslandNotificationHelper.IslandState.clear(context, testMode = true)
     }
 
     // 每分钟兜底补发：窗口内且未发送的课立即补发
