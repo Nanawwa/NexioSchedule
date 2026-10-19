@@ -119,9 +119,12 @@ class NexioApplication : Application() {
     private fun initWearableSync() {
         runCatching {
             com.haooz.chedule.wearable.WearableScheduleSync.init(this)
+            // Wear OS 手表共用同一个监听：课表一变就重推一次
+            com.haooz.chedule.wearable.WearScheduleSync.pushToday(this, "app-start")
             val repo = com.haooz.chedule.data.CourseRepository.getInstance()
             repo.addCourseChangedListener { _, _ ->
                 com.haooz.chedule.wearable.WearableScheduleSync.onScheduleChanged("course-change")
+                com.haooz.chedule.wearable.WearScheduleSync.pushToday(this, "course-change")
             }
         }
     }

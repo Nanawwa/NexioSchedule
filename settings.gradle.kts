@@ -31,5 +31,7 @@ include(":miuix")
 // 共享 UI 模块（android + jvm 双目标），Android 与桌面端共用同一批页面。
 include(":ui-shared")
 include(":desktopApp")
+// Wear OS 表盘数据源。独立 APK，侧载到手表，不参与手机端构建。
+include(":wearApp")
  
 

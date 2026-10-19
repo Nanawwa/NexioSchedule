@@ -145,6 +145,19 @@
             android:name=".reminder.WidgetRefreshReceiver"
             android:exported="false" />
 
+        <!-- Wear OS：接收手表发来的「把课表发我」请求 -->
+        <service
+            android:name=".wearable.WearRequestService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data
+                    android:scheme="wear"
+                    android:host="*"
+                    android:pathPrefix="/nexio" />
+            </intent-filter>
+        </service>
+
         <receiver
             android:name=".reminder.CourseStartReceiver"
             android:exported="false" />

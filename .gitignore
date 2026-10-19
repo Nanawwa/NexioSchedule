@@ -9,6 +9,7 @@ backdrop/build
 miuix/build
 ui-shared/build
 desktopApp/build
+wearApp/build
 local.properties
 
 # --- IDE 配置 ---

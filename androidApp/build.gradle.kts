@@ -14,7 +14,11 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.haooz.chedule"
+        // 共存版把 applicationId 换成独立包名，可与原版同时安装。
+        // 用属性控制而不是直接写死：上游同步时这行不会被反复改动，
+        // 也方便在本地构建出与原版同包名的包做对比。
+        //   ./gradlew assembleRelease -PnexioAppId=com.haooz.chedule.fork
+        applicationId = (project.findProperty("nexioAppId") as String?) ?: "com.haooz.chedule"
         minSdk = 26
         targetSdk = 37
         versionCode = 165
@@ -136,6 +140,9 @@ dependencies {
     implementation(libs.shizuku.api)
     // Shizuku Provider：进程间通信接入
     implementation(libs.shizuku.provider)
+
+    // Wear OS：把手表课表经 Data Layer 发给手表端（与 xms-wearable 是两条独立通道）
+    implementation("com.google.android.gms:play-services-wearable:20.0.1")
 
     // ===== 网络 =====
     // OkHttp：HTTP 客户端
