@@ -21,3 +21,42 @@ internal fun SharedPreferences.classroomLabelRule(): ClassroomLabelRule =
 /** 缩略态用的地点文案。规则为「原样显示」且没开保留尾部时，与课表原文逐字相同。 */
 internal fun SharedPreferences.shortClassroom(classroom: String): String =
     ClassroomLabel.apply(classroom, classroomLabelRule())
+
+/**
+ * 息屏（AOD）标题：`主体 | xx:xx下课`。
+ *
+ * 宽度预算与裁剪规则在 :core 的 [ClassroomLabel.aodTitle]，两端共用一份实现，
+ * 这里只负责把用户设置（地点精简档位）喂进去。
+ *
+ * @param endTime "HH:mm"；为空表示这节课没有可用时刻，此时只输出主体
+ */
+internal fun SharedPreferences.aodTitle(
+    courseName: String,
+    shortClassroom: String,
+    endTime: String,
+): String {
+    val label = if (endTime.isBlank()) "" else "${endTime}下课"
+    return ClassroomLabel.aodTitle(
+        main = courseName,
+        fallback = shortClassroom,
+        timeLabel = label,
+        slotWidth = classroomLabelRule().slotWidth,
+    )
+}
+
+/**
+ * 课前岛用的息屏标题：时刻是「上课」，不是「下课」。
+ */
+internal fun SharedPreferences.aodTitleForStart(
+    courseName: String,
+    shortClassroom: String,
+    startTime: String,
+): String {
+    val label = if (startTime.isBlank()) "" else "${startTime}上课"
+    return ClassroomLabel.aodTitle(
+        main = courseName,
+        fallback = shortClassroom,
+        timeLabel = label,
+        slotWidth = classroomLabelRule().slotWidth,
+    )
+}

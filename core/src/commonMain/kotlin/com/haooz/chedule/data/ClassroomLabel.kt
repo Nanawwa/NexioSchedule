@@ -218,6 +218,54 @@ object ClassroomLabel {
         return width
     }
 
+    /**
+     * 息屏标题：`主体 | xx:xx下课`（或上课）。
+     *
+     * `aodTitle` 只是一个静态字符串，没有系统自刷的 timerInfo —— 想让它显示跳动的
+     * 倒计时，就得由应用每分钟重推通知，课中段可能持续 95 分钟。所以这里只放
+     * 「主体 + 静态时刻」：信息量与倒计时等价，零额外唤醒。
+     *
+     * 宽度按窄条预算分配：时刻段固定占 [slotWidth] 的一部分，主体优先课程名，
+     * 放不下时退到已经精简过的地点（比截断的课程名更好认）。
+     *
+     * @param slotWidth 可用半角数；<=0 时不做宽度裁剪
+     * @param timeLabel 例如 "15:35下课"；空串则只输出主体
+     */
+    fun aodTitle(
+        main: String,
+        fallback: String,
+        timeLabel: String,
+        slotWidth: Int,
+    ): String {
+        if (timeLabel.isBlank()) return main
+        if (slotWidth <= 0) return if (main.isEmpty()) timeLabel else "$main | $timeLabel"
+
+        // 竖线两侧各留一个半角空格
+        val mainBudget = slotWidth - slotDisplayWidth(timeLabel) - 3
+        if (mainBudget <= 0) return timeLabel
+
+        val chosen = when {
+            main.isNotEmpty() && slotDisplayWidth(main) <= mainBudget -> main
+            fallback.isNotEmpty() -> fallback
+            else -> main
+        }
+        // 主体仍超预算时截到能放下为止（保住右侧时刻不丢）
+        val fitted = if (slotDisplayWidth(chosen) <= mainBudget) {
+            chosen
+        } else {
+            var width = 0
+            val sb = StringBuilder()
+            for (c in chosen) {
+                val w = charWidth(c)
+                if (width + w > mainBudget) break
+                sb.append(c)
+                width += w
+            }
+            sb.toString()
+        }
+        return if (fitted.isEmpty()) timeLabel else "$fitted | $timeLabel"
+    }
+
     /** 自定义正则的合法性检查。返回 null 表示可用；UI 用它拦下明显写错的输入。 */
     fun patternError(pattern: String): String? {
         if (pattern.isBlank()) return null

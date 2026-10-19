@@ -433,7 +433,14 @@ object IslandNotificationHelper {
             2 -> if (counting) "${minutesUntil}分钟" else "已上课"
             else -> shortClassroom
         }
-        val aodTitle = if (aodMode == 1) shortClassroom.ifEmpty { courseName ?: title } else courseName ?: title
+        // 课前岛：息屏显示「课程名 | xx:xx上课」。
+        // 与课中/课间不同，这里的时刻是即将开始的那一节，不是下课。
+        val aodTitle = if (aodMode == 1) {
+            // 老选项「只显示地点」保留：部分用户就是要一眼看到教室
+            prefs.aodTitleForStart(shortClassroom.ifEmpty { courseName ?: title }, shortClassroom, startTime ?: "")
+        } else {
+            prefs.aodTitleForStart(courseName ?: title, shortClassroom, startTime ?: "")
+        }
 
         val paramV2 = JSONObject().apply {
             put("business", BUSINESS_TAG)
@@ -629,10 +636,11 @@ object IslandNotificationHelper {
         // 与课前岛同理：课中岛的息屏标题、展开态「地点」行都是窄条，真机实测会把
         // 「新校区J02西414」截成「新校区J…」，所以统一喂精简后的地点。
         val shortClassroom = prefs.shortClassroom(classroom)
+        // 课中岛：息屏显示「课程名 | xx:xx下课」
         val aodTitle = if (aodMode == 1) {
-            shortClassroom.ifEmpty { courseName }
+            prefs.aodTitle(shortClassroom.ifEmpty { courseName }, shortClassroom, endTime)
         } else {
-            courseName
+            prefs.aodTitle(courseName, shortClassroom, endTime)
         }
         // 自定义时间课的 section 是「开始 - 结束」，再拼一次会变成「时间｜时间」
         val showSection = section.isNotEmpty() && !isCustomTime
@@ -807,10 +815,11 @@ object IslandNotificationHelper {
         val now = System.currentTimeMillis()
         val counting = breakEndMillis > now
         val shortClassroom = prefs.shortClassroom(nextClassroom)
+        // 课间岛：息屏显示「下一节课程名 | xx:xx上课」
         val aodTitle = if (aodMode == 1) {
-            shortClassroom.ifEmpty { nextCourseName }
+            prefs.aodTitle(shortClassroom.ifEmpty { nextCourseName }, shortClassroom, nextStartTime)
         } else {
-            nextCourseName
+            prefs.aodTitle(nextCourseName, shortClassroom, nextStartTime)
         }
 
         val paramV2 = JSONObject().apply {
