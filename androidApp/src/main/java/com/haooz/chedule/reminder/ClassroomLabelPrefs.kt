@@ -23,40 +23,60 @@ internal fun SharedPreferences.shortClassroom(classroom: String): String =
     ClassroomLabel.apply(classroom, classroomLabelRule())
 
 /**
- * 息屏（AOD）标题：`主体 | xx:xx下课`。
+ * 息屏（AOD）标题：左右两区按用户选择拼成 `左 | 右`。
  *
- * 宽度预算与裁剪规则在 :core 的 [ClassroomLabel.aodTitle]，两端共用一份实现，
- * 这里只负责把用户设置（地点精简档位）喂进去。
+ * 宽度分配与截断规则在 :core 的 [ClassroomLabel.aodSlotText]，两端共用。
  *
- * @param endTime "HH:mm"；为空表示这节课没有可用时刻，此时只输出主体
+ * 区内容约定（与设置页下拉一一对应）：
+ * - 0 课程名称
+ * - 1 上课地点（已按地点精简规则处理）
+ * - 2 时刻，形如 "15:35下课" / "08:30上课"
+ *
+ * @param timeLabel 该岛对应的时刻文案；空串表示这节课没有可用时间
  */
 internal fun SharedPreferences.aodTitle(
     courseName: String,
     shortClassroom: String,
-    endTime: String,
+    timeLabel: String,
+    leftMode: Int,
+    rightMode: Int,
 ): String {
-    val label = if (endTime.isBlank()) "" else "${endTime}下课"
-    return ClassroomLabel.aodTitle(
-        main = courseName,
-        fallback = shortClassroom,
-        timeLabel = label,
+    fun contentOf(mode: Int): String = when (mode) {
+        1 -> shortClassroom
+        2 -> timeLabel
+        else -> courseName
+    }
+    return ClassroomLabel.aodSlotText(
+        left = contentOf(leftMode),
+        right = contentOf(rightMode),
         slotWidth = classroomLabelRule().slotWidth,
     )
 }
 
-/**
- * 课前岛用的息屏标题：时刻是「上课」，不是「下课」。
- */
+/* 便捷重载：三个岛各自知道自己的时刻语义 */
+
+/** 课前岛：时刻是「即将上课」，不是下课 */
 internal fun SharedPreferences.aodTitleForStart(
     courseName: String,
     shortClassroom: String,
     startTime: String,
-): String {
-    val label = if (startTime.isBlank()) "" else "${startTime}上课"
-    return ClassroomLabel.aodTitle(
-        main = courseName,
-        fallback = shortClassroom,
-        timeLabel = label,
-        slotWidth = classroomLabelRule().slotWidth,
-    )
-}
+): String = aodTitle(
+    courseName = courseName,
+    shortClassroom = shortClassroom,
+    timeLabel = if (startTime.isBlank()) "" else "${startTime}上课",
+    leftMode = getInt("island_aod_left_mode", getInt("island_aod_mode", 0)),
+    rightMode = getInt("island_aod_right_mode", 2),
+)
+
+/** 课中岛：时刻是本节下课 */
+internal fun SharedPreferences.aodTitleForEnd(
+    courseName: String,
+    shortClassroom: String,
+    endTime: String,
+): String = aodTitle(
+    courseName = courseName,
+    shortClassroom = shortClassroom,
+    timeLabel = if (endTime.isBlank()) "" else "${endTime}下课",
+    leftMode = getInt("island_aod_left_mode", getInt("island_aod_mode", 0)),
+    rightMode = getInt("island_aod_right_mode", 2),
+)

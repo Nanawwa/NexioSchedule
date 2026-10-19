@@ -649,80 +649,54 @@ class ClassroomLabelTest {
             "提示词里只应解析出那 3 条示例，实际：$parsed")
     }
 
-    // ── 息屏标题（aodTitle）────────────────────────────────────────────────
+    // ── 息屏左右两区（aodSlotText）────────────────────────────────────────
     //
-    // aodTitle 是纯静态字符串：一旦主体超宽，系统会从**尾部**截断，
-    // 而尾部正是「xx:xx下课」—— 时刻丢了这条信息就没用了。所以裁剪必须由我们做。
+    // 系统从**尾部**截断：右区丢了最显眼（时刻没了这条就没用），所以先保右区。
 
     @Test
-    fun `息屏标题把时刻放在右侧并保留竖线分隔`() {
-        val out = ClassroomLabel.aodTitle(
-            main = "高等数学",
-            fallback = "J02西414",
-            timeLabel = "15:35下课",
-            slotWidth = 20,
-        )
+    fun `息屏两区用竖线分隔`() {
+        val out = ClassroomLabel.aodSlotText("高等数学", "15:35下课", slotWidth = 24)
         assertEquals("高等数学 | 15:35下课", out)
     }
 
     @Test
-    fun `课程名超宽时退到地点，时刻不能被截掉`() {
-        val out = ClassroomLabel.aodTitle(
-            main = "毛泽东思想和中国特色社会主义理论体系概论",
-            fallback = "J02西414",
-            timeLabel = "15:35下课",
-            slotWidth = 20,
-        )
-        assertTrue(out.endsWith("15:35下课"), "时刻必须在尾部完整保留：$out")
-        assertTrue(out.contains("J02西414"), "课程名放不下时应退到地点：$out")
+    fun `右区为空时只输出左区`() {
+        assertEquals("高等数学", ClassroomLabel.aodSlotText("高等数学", "", slotWidth = 24))
     }
 
     @Test
-    fun `宽度极小时只保留时刻`() {
-        // 预算连时刻都放不下：宁可只显示时刻，也不要把时刻截一半
-        val out = ClassroomLabel.aodTitle(
-            main = "高等数学",
-            fallback = "J02西414",
-            timeLabel = "15:35下课",
-            slotWidth = 8,
+    fun `左区为空时只输出右区`() {
+        assertEquals("15:35下课", ClassroomLabel.aodSlotText("", "15:35下课", slotWidth = 24))
+    }
+
+    @Test
+    fun `两区都为空时输出空串`() {
+        assertEquals("", ClassroomLabel.aodSlotText("", "", slotWidth = 24))
+    }
+
+    @Test
+    fun `超宽时右区优先保留，左区被截`() {
+        val out = ClassroomLabel.aodSlotText(
+            left = "毛泽东思想和中国特色社会主义理论体系概论",
+            right = "15:35下课",
+            slotWidth = 20,
         )
+        assertTrue(out.endsWith("15:35下课"), "右区必须完整：$out")
+        assertTrue(
+            ClassroomLabel.slotDisplayWidth(out) <= 20,
+            "总宽不能超预算，否则系统会再截掉右区：$out",
+        )
+    }
+
+    @Test
+    fun `右区都放不下时只输出右区`() {
+        val out = ClassroomLabel.aodSlotText("高等数学", "15:35下课", slotWidth = 8)
         assertEquals("15:35下课", out)
     }
 
     @Test
-    fun `没有下课时间时只输出课程名`() {
-        val out = ClassroomLabel.aodTitle(
-            main = "高等数学",
-            fallback = "J02西414",
-            timeLabel = "",
-            slotWidth = 14,
-        )
-        assertEquals("高等数学", out)
-    }
-
-    @Test
-    fun `地点也超宽时按半角宽度硬截，不让系统再截一次`() {
-        val out = ClassroomLabel.aodTitle(
-            main = "",
-            fallback = "新校区第五教学楼C509机房",
-            timeLabel = "15:35下课",
-            slotWidth = 12,
-        )
-        assertTrue(out.endsWith("15:35下课"), "时刻必须保留：$out")
-        assertTrue(
-            ClassroomLabel.slotDisplayWidth(out) <= 12,
-            "拼接后不能超出预算，否则系统会再截掉时刻：$out",
-        )
-    }
-
-    @Test
     fun `未设置宽度档位时不做裁剪`() {
-        val out = ClassroomLabel.aodTitle(
-            main = "高等数学",
-            fallback = "J02西414",
-            timeLabel = "15:35下课",
-            slotWidth = 0,
-        )
+        val out = ClassroomLabel.aodSlotText("高等数学", "15:35下课", slotWidth = 0)
         assertEquals("高等数学 | 15:35下课", out)
     }
 }

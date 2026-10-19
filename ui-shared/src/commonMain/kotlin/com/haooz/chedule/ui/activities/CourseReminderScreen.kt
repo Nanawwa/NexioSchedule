@@ -145,8 +145,19 @@ fun CourseReminderScreen(
     var islandLeftMode by remember { mutableIntStateOf(reminderPrefs.getInt("island_left_mode", 0)) }
     // 超级岛右侧显示：0=课程名称，1=上课地点，2=倒计时
     var islandRightMode by remember { mutableIntStateOf(reminderPrefs.getInt("island_right_mode", 1)) }
-    // 超级岛息屏显示：0=课程名称，1=上课地点
-    var islandAodMode by remember { mutableIntStateOf(reminderPrefs.getInt("island_aod_mode", 0)) }
+    // 超级岛息屏显示：左/右两区各 0=课程名称，1=上课地点，2=倒计时(上课/下课时刻)
+    // 旧键 island_aod_mode（单值）保留读取，升级时映射到左侧，右侧默认时刻
+    var islandAodLeftMode by remember {
+        mutableIntStateOf(
+            reminderPrefs.getInt(
+                "island_aod_left_mode",
+                reminderPrefs.getInt("island_aod_mode", 0),
+            )
+        )
+    }
+    var islandAodRightMode by remember {
+        mutableIntStateOf(reminderPrefs.getInt("island_aod_right_mode", 2))
+    }
     // 课中岛缩略态右侧：0=正在上课，1=距下课倒计时（仅超级岛生效）
     var islandInClassRightMode by remember {
         mutableIntStateOf(reminderPrefs.getInt("island_in_class_right_mode", 0))
@@ -830,26 +841,49 @@ fun CourseReminderScreen(
                             ),
                         )
 
-                        val islandAodOptions = listOf(
+                        // 息屏左右两区。可选内容与岛内槽位一致，但「倒计时」在息屏里
+                        // 落地为静态时刻（xx:xx上课 / xx:xx下课）——
+                        // aodTitle 没有系统自刷机制，放跳动数字得每分钟重推通知。
+                        fun aodOptions(
+                            selectedMode: Int,
+                            key: String,
+                            onPick: (Int) -> Unit,
+                        ) = listOf(
                             DropdownItem(
                                 text = "课程名称",
-                                selected = islandAodMode == 0,
+                                selected = selectedMode == 0,
                                 onClick = {
-                                    rlog("island_aod_mode", "mode=0 课程名称")
-                                    islandAodMode = 0
-                                    reminderPrefs.edit { putInt("island_aod_mode", 0) }
+                                    rlog(key, "mode=0 课程名称")
+                                    onPick(0)
+                                    reminderPrefs.edit { putInt(key, 0) }
                                 }
                             ),
                             DropdownItem(
                                 text = "上课地点",
-                                selected = islandAodMode == 1,
+                                selected = selectedMode == 1,
                                 onClick = {
-                                    rlog("island_aod_mode", "mode=1 上课地点")
-                                    islandAodMode = 1
-                                    reminderPrefs.edit { putInt("island_aod_mode", 1) }
+                                    rlog(key, "mode=1 上课地点")
+                                    onPick(1)
+                                    reminderPrefs.edit { putInt(key, 1) }
+                                }
+                            ),
+                            DropdownItem(
+                                text = "时刻（xx:xx上课/下课）",
+                                summary = "静态时刻，不是跳动的倒计时",
+                                selected = selectedMode == 2,
+                                onClick = {
+                                    rlog(key, "mode=2 时刻")
+                                    onPick(2)
+                                    reminderPrefs.edit { putInt(key, 2) }
                                 }
                             ),
                         )
+                        val islandAodLeftOptions = aodOptions(islandAodLeftMode, "island_aod_left_mode") {
+                            islandAodLeftMode = it
+                        }
+                        val islandAodRightOptions = aodOptions(islandAodRightMode, "island_aod_right_mode") {
+                            islandAodRightMode = it
+                        }
 
                         // 课中岛缩略态右侧：与课前岛的左右两侧互不干扰
                         val islandInClassRightOptions = listOf(
@@ -918,9 +952,17 @@ fun CourseReminderScreen(
                                 }
                                 if (isHyperIsland) {
                                     OverlayDropdownMenu(
-                                        title = "息屏显示",
+                                        title = "息屏左侧",
                                         summary = "全天候显示时无效",
-                                        entry = DropdownEntry(items = islandAodOptions),
+                                        entry = DropdownEntry(items = islandAodLeftOptions),
+                                        collapseOnSelection = true,
+                                        liquidGlassBackdrop = liquidGlassBackdrop,
+                                        dropdownColors = liquidGlassDropdownColors,
+                                    )
+                                    OverlayDropdownMenu(
+                                        title = "息屏右侧",
+                                        summary = "两区都选内容时用「|」分隔",
+                                        entry = DropdownEntry(items = islandAodRightOptions),
                                         collapseOnSelection = true,
                                         liquidGlassBackdrop = liquidGlassBackdrop,
                                         dropdownColors = liquidGlassDropdownColors,

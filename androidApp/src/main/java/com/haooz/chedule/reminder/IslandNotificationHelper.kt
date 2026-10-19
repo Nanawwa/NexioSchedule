@@ -411,7 +411,6 @@ object IslandNotificationHelper {
         val expandGlowEnabled = prefs.getBoolean(KEY_ISLAND_EXPAND_GLOW_ENABLED, true)
         val leftMode = prefs.getInt("island_left_mode", 0)
         val rightMode = prefs.getInt("island_right_mode", 1)
-        val aodMode = prefs.getInt("island_aod_mode", 0)
 
         val now = System.currentTimeMillis()
         // 槽位、息屏标题、展开态「地点」行都只有十几个半角宽，超了由系统从尾部截断
@@ -433,14 +432,8 @@ object IslandNotificationHelper {
             2 -> if (counting) "${minutesUntil}分钟" else "已上课"
             else -> shortClassroom
         }
-        // 课前岛：息屏显示「课程名 | xx:xx上课」。
-        // 与课中/课间不同，这里的时刻是即将开始的那一节，不是下课。
-        val aodTitle = if (aodMode == 1) {
-            // 老选项「只显示地点」保留：部分用户就是要一眼看到教室
-            prefs.aodTitleForStart(shortClassroom.ifEmpty { courseName ?: title }, shortClassroom, startTime ?: "")
-        } else {
-            prefs.aodTitleForStart(courseName ?: title, shortClassroom, startTime ?: "")
-        }
+        // 课前岛：息屏左右两区，时刻是「即将上课」
+        val aodTitle = prefs.aodTitleForStart(courseName ?: title, shortClassroom, startTime ?: "")
 
         val paramV2 = JSONObject().apply {
             put("business", BUSINESS_TAG)
@@ -627,7 +620,6 @@ object IslandNotificationHelper {
         val json = JSONObject()
         val prefs = context.getSharedPreferences("course_reminder_prefs", Context.MODE_PRIVATE)
         val expandGlowEnabled = prefs.getBoolean(KEY_ISLAND_EXPAND_GLOW_ENABLED, true)
-        val aodMode = prefs.getInt("island_aod_mode", 0)
         // 课中岛缩略态 B 区：0=正在上课（静态文案），1=距下课倒计时
         val inClassRightMode = prefs.getInt("island_in_class_right_mode", 0)
 
@@ -636,12 +628,8 @@ object IslandNotificationHelper {
         // 与课前岛同理：课中岛的息屏标题、展开态「地点」行都是窄条，真机实测会把
         // 「新校区J02西414」截成「新校区J…」，所以统一喂精简后的地点。
         val shortClassroom = prefs.shortClassroom(classroom)
-        // 课中岛：息屏显示「课程名 | xx:xx下课」
-        val aodTitle = if (aodMode == 1) {
-            prefs.aodTitle(shortClassroom.ifEmpty { courseName }, shortClassroom, endTime)
-        } else {
-            prefs.aodTitle(courseName, shortClassroom, endTime)
-        }
+        // 课中岛：息屏左右两区，时刻是本节「下课」
+        val aodTitle = prefs.aodTitleForEnd(courseName, shortClassroom, endTime)
         // 自定义时间课的 section 是「开始 - 结束」，再拼一次会变成「时间｜时间」
         val showSection = section.isNotEmpty() && !isCustomTime
         val baseContent = buildString {
@@ -810,17 +798,12 @@ object IslandNotificationHelper {
         val json = JSONObject()
         val prefs = context.getSharedPreferences("course_reminder_prefs", Context.MODE_PRIVATE)
         val expandGlowEnabled = prefs.getBoolean(KEY_ISLAND_EXPAND_GLOW_ENABLED, true)
-        val aodMode = prefs.getInt("island_aod_mode", 0)
 
         val now = System.currentTimeMillis()
         val counting = breakEndMillis > now
         val shortClassroom = prefs.shortClassroom(nextClassroom)
-        // 课间岛：息屏显示「下一节课程名 | xx:xx上课」
-        val aodTitle = if (aodMode == 1) {
-            prefs.aodTitle(shortClassroom.ifEmpty { nextCourseName }, shortClassroom, nextStartTime)
-        } else {
-            prefs.aodTitle(nextCourseName, shortClassroom, nextStartTime)
-        }
+        // 课间岛：息屏左右两区，时刻是下一节「上课」
+        val aodTitle = prefs.aodTitleForStart(nextCourseName, shortClassroom, nextStartTime)
 
         val paramV2 = JSONObject().apply {
             put("business", BUSINESS_TAG)

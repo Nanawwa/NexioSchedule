@@ -219,51 +219,53 @@ object ClassroomLabel {
     }
 
     /**
-     * 息屏标题：`主体 | xx:xx下课`（或上课）。
+     * 息屏标题：左右两个区，用 ` | ` 分隔。
      *
-     * `aodTitle` 只是一个静态字符串，没有系统自刷的 timerInfo —— 想让它显示跳动的
-     * 倒计时，就得由应用每分钟重推通知，课中段可能持续 95 分钟。所以这里只放
-     * 「主体 + 静态时刻」：信息量与倒计时等价，零额外唤醒。
+     * `aodTitle` 是纯字符串，没有系统自刷的 timerInfo —— 想显示跳动的倒计时就得
+     * 每分钟重推通知，课中段可能持续 95 分钟。所以「倒计时」这一项在息屏里落地为
+     * 静态时刻（"15:35下课"），信息量等价、零额外唤醒。
      *
-     * 宽度按窄条预算分配：时刻段固定占 [slotWidth] 的一部分，主体优先课程名，
-     * 放不下时退到已经精简过的地点（比截断的课程名更好认）。
+     * 宽度预算按窄条分配，**后区优先**：系统从尾部截断，右区丢了更显眼
+     * （时刻没了这条就没用）。所以先保右区，左区拿剩下的宽度硬截。
      *
-     * @param slotWidth 可用半角数；<=0 时不做宽度裁剪
-     * @param timeLabel 例如 "15:35下课"；空串则只输出主体
+     * @param left 左区文案；空串表示不显示
+     * @param right 右区文案；空串表示不显示
+     * @param slotWidth 可用半角数；<=0 不裁剪
      */
-    fun aodTitle(
-        main: String,
-        fallback: String,
-        timeLabel: String,
-        slotWidth: Int,
-    ): String {
-        if (timeLabel.isBlank()) return main
-        if (slotWidth <= 0) return if (main.isEmpty()) timeLabel else "$main | $timeLabel"
+    fun aodSlotText(left: String, right: String, slotWidth: Int): String {
+        val l = left.trim()
+        val r = right.trim()
+        if (l.isEmpty()) return r
+        if (r.isEmpty()) return l
+        val sep = " | "
+        if (slotWidth <= 0) return "$l$sep$r"
 
-        // 竖线两侧各留一个半角空格
-        val mainBudget = slotWidth - slotDisplayWidth(timeLabel) - 3
-        if (mainBudget <= 0) return timeLabel
+        val sepWidth = slotDisplayWidth(sep)
+        val rightBudget = (slotWidth - sepWidth).coerceAtLeast(0)
+        // 右区永远不截：时刻被截一半（"15:35" 少掉「下课」）比轻微超宽更糟。
+        // 放不下就连同分隔符一起放弃左区，整条宽度都留给右区。
+        if (slotDisplayWidth(r) > rightBudget) return r
+        val rightFitted = r
 
-        val chosen = when {
-            main.isNotEmpty() && slotDisplayWidth(main) <= mainBudget -> main
-            fallback.isNotEmpty() -> fallback
-            else -> main
+        val leftBudget = slotWidth - sepWidth - slotDisplayWidth(rightFitted)
+        if (leftBudget <= 0) return rightFitted
+        val leftFitted = fitToWidth(l, leftBudget)
+        return if (leftFitted.isEmpty()) rightFitted else "$leftFitted$sep$rightFitted"
+    }
+
+    /** 按半角宽度截断，不追加省略号（窄条上省略号也占位） */
+    private fun fitToWidth(text: String, budget: Int): String {
+        if (budget <= 0) return ""
+        if (slotDisplayWidth(text) <= budget) return text
+        var width = 0
+        val sb = StringBuilder()
+        for (c in text) {
+            val w = charWidth(c)
+            if (width + w > budget) break
+            sb.append(c)
+            width += w
         }
-        // 主体仍超预算时截到能放下为止（保住右侧时刻不丢）
-        val fitted = if (slotDisplayWidth(chosen) <= mainBudget) {
-            chosen
-        } else {
-            var width = 0
-            val sb = StringBuilder()
-            for (c in chosen) {
-                val w = charWidth(c)
-                if (width + w > mainBudget) break
-                sb.append(c)
-                width += w
-            }
-            sb.toString()
-        }
-        return if (fitted.isEmpty()) timeLabel else "$fitted | $timeLabel"
+        return sb.toString()
     }
 
     /** 自定义正则的合法性检查。返回 null 表示可用；UI 用它拦下明显写错的输入。 */
