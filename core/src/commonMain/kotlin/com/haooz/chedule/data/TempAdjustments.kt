@@ -197,6 +197,24 @@ object TempAdjustments {
         return runCatching { decode(json) }.getOrDefault(emptyList())
     }
 
+    /**
+     * 一次读多天的规则。
+     *
+     * 按周铺满学期时会对每一天各调一次 [load] —— 那是 133 次 SharedPreferences
+     * 读取。存储里其实只有「有调整的那几天」才有内容，所以先看有哪些键，
+     * 只读真正存在的那几个。
+     */
+    fun loadMany(dates: List<LocalDate>): Map<LocalDate, List<Change>> {
+        if (!AppStorage.isReady || dates.isEmpty()) return emptyMap()
+        val wanted = dates.toSet()
+        val keys = runCatching { store().all().keys }.getOrDefault(emptySet())
+        val present = wanted.filter { date ->
+            keys.any { it == KEY_PREFIX + date.toString() }
+        }
+        if (present.isEmpty()) return emptyMap()
+        return present.associateWith { date -> load(date) }
+    }
+
     fun save(date: LocalDate, changes: List<Change>) {
         val key = KEY_PREFIX + date.toString()
         store().edit {

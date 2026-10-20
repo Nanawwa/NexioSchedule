@@ -558,31 +558,45 @@ fun MainScheduleScreen(
         followPositionFor,
     ) {
         if (totalWeeks <= 0) emptyMap()
-        else HashMap<Int, Map<Int, Triple<Int, Int, List<Course>>>>(totalWeeks).apply {
-            for (page in 0 until totalWeeks) {
-                val weekForPage = page + 1
-                put(page, allDays.associateWith { dayOfWeek ->
-                    val dateForDay = dateForTeachingPosition(weekForPage, dayOfWeek)
-                        ?: return@associateWith Triple(dayOfWeek, weekForPage, emptyList())
-                    val swapForDay = workswapIndex[dateForDay.toString()]
-                    val follow = swapForDay?.let { followPositionFor(it) }
-                    val displayDay = follow?.second ?: dayOfWeek
-                    val displayWeek = follow?.first ?: weekForPage
-                    // 按这一天的真实日期解析，而不是按「星期几」直接筛课表：
-                    // 调休改显示的星期，临时调课还会改节次/停课/加课。
-                    val dayCourses = runCatching {
-                        DayScheduleResolver.resolveDaySchedule(
-                            date = dateForDay,
-                            repository = scheduleRepository,
-                            holidayEntriesByYear = holidayEntriesByYear,
-                        ).courses
-                    }.getOrElse {
-                        val fallback = coursesByDay[displayDay] ?: emptyList()
-                        if (showNonCurrentWeek) fallback
-                        else fallback.filter { it.isActiveInWeek(displayWeek) }
+        else {
+            // 整批一次解析：19 周 × 7 天 = 133 格，逐格调用会重复读教学周重组规则、
+            // 重复解码、重复算教学周位置。批量入口把这些共享项提到循环外。
+            val allDates = buildList {
+                for (page in 0 until totalWeeks) {
+                    val weekForPage = page + 1
+                    for (dayOfWeek in allDays) {
+                        dateForTeachingPosition(weekForPage, dayOfWeek)?.let { add(it) }
                     }
-                    Triple(displayDay, displayWeek, dayCourses)
-                })
+                }
+            }
+            val resolutions = runCatching {
+                DayScheduleResolver.resolveDaySchedules(
+                    dates = allDates,
+                    repository = scheduleRepository,
+                    holidayEntriesByYear = holidayEntriesByYear,
+                )
+            }.getOrDefault(emptyMap())
+
+            HashMap<Int, Map<Int, Triple<Int, Int, List<Course>>>>(totalWeeks).apply {
+                for (page in 0 until totalWeeks) {
+                    val weekForPage = page + 1
+                    put(page, allDays.associateWith { dayOfWeek ->
+                        val dateForDay = dateForTeachingPosition(weekForPage, dayOfWeek)
+                            ?: return@associateWith Triple(dayOfWeek, weekForPage, emptyList())
+                        val swapForDay = workswapIndex[dateForDay.toString()]
+                        val follow = swapForDay?.let { followPositionFor(it) }
+                        val displayDay = follow?.second ?: dayOfWeek
+                        val displayWeek = follow?.first ?: weekForPage
+                        // 按这一天的真实日期解析，而不是按「星期几」直接筛课表：
+                        // 调休改显示的星期，临时调课还会改节次/停课/加课。
+                        val dayCourses = resolutions[dateForDay]?.courses ?: run {
+                            val fallback = coursesByDay[displayDay] ?: emptyList()
+                            if (showNonCurrentWeek) fallback
+                            else fallback.filter { it.isActiveInWeek(displayWeek) }
+                        }
+                        Triple(displayDay, displayWeek, dayCourses)
+                    })
+                }
             }
         }
     }

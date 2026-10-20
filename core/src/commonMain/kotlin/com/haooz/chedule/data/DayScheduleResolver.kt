@@ -144,6 +144,111 @@ object DayScheduleResolver {
         )
     }
 
+    /**
+     * 一次算多天。给「按周铺满整个学期」这类场景用。
+     *
+     * 逐日调用 [resolveDaySchedule] 时，每一天都要重新读一次
+     * 教学周重组规则、解码一次、算一次教学周位置，还要各读一遍
+     * 节假日排除配置。19 周 × 7 天 = 133 次，重复的读和解析是纯浪费。
+     *
+     * 这里把只与课表有关、整批共享的部分提到循环外：
+     * 教学周重组规则、学期起始日、节次表、节次数量、节假日排除配置、
+     * 课表总周数与最后有课周次。逐日剩下的只有「这一天是什么」。
+     */
+    fun resolveDaySchedules(
+        dates: List<LocalDate>,
+        repository: CourseRepository,
+        holidayEntriesByYear: Map<Int, List<HolidayEntry>>? = null,
+    ): Map<LocalDate, DayScheduleResolution> {
+        if (dates.isEmpty()) return emptyMap()
+
+        val entriesByYear = holidayEntriesByYear ?: HolidayManager.loadAllByYear()
+        val exclusion = HolidayManager.loadEndCourseExclusion()
+        val beforeExclusion = HolidayManager.loadBeforeCourseExclusion()
+
+        // 以下几项整批只取一次
+        val rules = repository.getTeachingWeekReorganizations()
+        val startDate = runCatching {
+            LocalDate.parse(repository.getClassStartTime().replace("/", "-"))
+        }.getOrNull()
+        val sectionTimes = repository.getCurrentSectionTimes()
+        val sectionCount = repository.getMorningSections() +
+            repository.getAfternoonSections() + repository.getEveningSections()
+        val totalWeeks = repository.getTotalWeeks()
+        val lastWeekWithCourses = repository.getLastWeekWithCourses()
+        val allCourses = repository.getAllCourses()
+        // 临时调课只有「有调整的那几天」才有内容，一次读完，别逐日读 SP
+        val tempByDate = TempAdjustments.loadMany(dates)
+
+        // 每门课的起始时刻整批只算一次。
+        // 逐格算的话，每格都会对当天的课重算一遍开始时间，而 getCourseStartTime
+        // 每次都要重读三段作息（getPeriodTimes → getTimeConfig.effective()），
+        // 133 格 × 每天几门课 = 几百次重复计算。
+        val startMinutesById = HashMap<String, Int>(allCourses.size)
+        allCourses.forEach { course ->
+            startMinutesById[course.id] = getCourseStartTime(course, repository).toMinutes()
+        }
+        // 按「星期 + 起始时刻」预先分组：每格只需要挑出自己那组再排序
+        val coursesByDayAndWeekday = allCourses.groupBy { it.dayOfWeek }
+
+        return dates.distinct().associateWith { date ->
+            val calendarDay = date.dayOfWeek.isoDayNumber
+            val holidayEntries = HolidayManager.entriesForDate(entriesByYear, date)
+            val targetEntry = holidayEntries.firstOrNull { it.type == HolidayManager.TYPE_WORKSWAP }
+            val datePosition = startDate?.let {
+                TeachingWeekReorganization.mapDate(it, date, rules)
+            } ?: TeachingWeekPosition(0L, calendarDay, isReorganizationPause = false)
+            val follow = targetEntry?.let { repository.resolveWorkSwapFollow(it) }
+            val isWorkSwap = follow != null
+            val displayDay = follow?.weekday
+                ?: datePosition.weekday ?: calendarDay
+            // alignedStoredWeekForDate 会再算一次教学周位置（重复解析学期起始日
+            // 和重组规则），这里已经算过 datePosition，直接复用。
+            val displayWeek = follow?.week
+                ?: datePosition.week.coerceIn(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong()).toInt()
+
+            val candidates = if (!canResolveCourseCandidates(
+                    datePosition = datePosition,
+                    workSwapEntry = targetEntry,
+                    displayWeek = displayWeek,
+                    totalWeeks = totalWeeks,
+                    lastWeekWithCourses = lastWeekWithCourses,
+                )
+            ) {
+                emptyList()
+            } else {
+                coursesByDayAndWeekday[displayDay]
+                    .orEmpty()
+                    .filter { it.isActiveInWeek(displayWeek) }
+                    .sortedBy { startMinutesById[it.id] ?: Int.MAX_VALUE }
+            }
+
+            val dayResolution = HolidayCourseExclusion.resolveDayCourses(
+                entriesByYear = entriesByYear,
+                date = date,
+                exclusion = exclusion,
+                candidates = { candidates },
+                sectionTimes = { sectionTimes },
+                sectionCount = { sectionCount },
+                beforeExclusion = beforeExclusion,
+            )
+            DayScheduleResolution(
+                courses = TempAdjustments.apply(
+                    dayResolution.courses,
+                    tempByDate[date] ?: emptyList(),
+                ),
+                displayDayOfWeek = displayDay,
+                displayWeek = displayWeek,
+                calendarDayOfWeek = calendarDay,
+                isHolidayDate = dayResolution.isHolidayDate,
+                isWorkSwap = isWorkSwap,
+                isHolidayEndCourseExclusionActive = dayResolution.isHolidayEndCourseExclusionActive,
+                isHolidayBeforeCourseExclusionActive =
+                    dayResolution.isHolidayBeforeCourseExclusionActive,
+            )
+        }
+    }
+
     fun resolveDaySchedule(
         date: LocalDate,
         entriesByYear: Map<Int, List<HolidayEntry>>,
