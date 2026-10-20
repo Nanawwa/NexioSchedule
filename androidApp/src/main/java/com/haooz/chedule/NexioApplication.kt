@@ -100,6 +100,9 @@ class NexioApplication : Application() {
                     runCatching { repository.dateForTeachingWeekDay(week, weekday) }.getOrNull()
                 }
             }
+            // 版本号先恢复：页面首帧组合时的 remember key 必须已是上一轮的值，
+            // 否则「上次改过、这次刚进」的改动会被当成没变。
+            runCatching { com.haooz.chedule.data.TempAdjustments.restoreRevision() }
             // 临时调课只对当天有意义，过了日期的记录留着只会白占空间。
             // 放在启动的后台线程里：这是一次纯删除，不该拖慢冷启动。
             runCatching {

@@ -100,6 +100,7 @@ import com.haooz.chedule.data.CourseRepository
 import com.haooz.chedule.data.DayScheduleResolver
 import com.haooz.chedule.data.HolidayCourseExclusion
 import com.haooz.chedule.data.HolidayManager
+import com.haooz.chedule.data.TempAdjustments
 import com.haooz.chedule.data.TeachingWeekReorganization
 import com.haooz.chedule.ui.basic.LiquidTopBarButton
 import top.yukonga.miuix.kmp.layout.SharedScrollBehavior
@@ -254,6 +255,9 @@ fun MainScheduleScreen(
     val classStartTime by viewModel.classStartTime.collectAsState()
     val dataVersion by viewModel.dataVersion.collectAsState()
     val holidayDataRevision by HolidayManager.dataRevision.collectAsState()
+    // 临时调课不写课表，dataVersion 不会动；周课表页的预计算必须另有一维 key，
+    // 否则改了临时调课、今天页变了，周课表页还停在旧数据。
+    val tempAdjustRevision by TempAdjustments.revision.collectAsState()
     val showAddDialog by viewModel.showAddDialog.collectAsState()
     val showNonCurrentWeek by settingsViewModel.showNonCurrentWeek.collectAsState()
     val smartWeekend by settingsViewModel.smartWeekend.collectAsState()
@@ -549,7 +553,7 @@ fun MainScheduleScreen(
     // 数据变化时一次算齐全部周：换周组合只查表，避免新页首帧在 composition 里扫课程/调休
     /** page -> dayOfWeek -> Triple(显示星期, 显示周次, 课程)；调课日显示 follow 星期/周次 */
     val weekFilteredCourses: Map<Int, Map<Int, Triple<Int, Int, List<Course>>>> = remember(
-        coursesByDay, showNonCurrentWeek, dataVersion, holidayVersion,
+        coursesByDay, showNonCurrentWeek, dataVersion, holidayVersion, tempAdjustRevision,
         workswapIndex, semesterStartMonday, totalWeeks, teachingWeekReorganizations,
         followPositionFor,
     ) {
@@ -564,10 +568,20 @@ fun MainScheduleScreen(
                     val follow = swapForDay?.let { followPositionFor(it) }
                     val displayDay = follow?.second ?: dayOfWeek
                     val displayWeek = follow?.first ?: weekForPage
-                    val dayCourses = coursesByDay[displayDay] ?: emptyList()
-                    val filtered = if (showNonCurrentWeek) dayCourses
-                    else dayCourses.filter { it.isActiveInWeek(displayWeek) }
-                    Triple(displayDay, displayWeek, filtered)
+                    // 按这一天的真实日期解析，而不是按「星期几」直接筛课表：
+                    // 调休改显示的星期，临时调课还会改节次/停课/加课。
+                    val dayCourses = runCatching {
+                        DayScheduleResolver.resolveDaySchedule(
+                            date = dateForDay,
+                            repository = scheduleRepository,
+                            holidayEntriesByYear = holidayEntriesByYear,
+                        ).courses
+                    }.getOrElse {
+                        val fallback = coursesByDay[displayDay] ?: emptyList()
+                        if (showNonCurrentWeek) fallback
+                        else fallback.filter { it.isActiveInWeek(displayWeek) }
+                    }
+                    Triple(displayDay, displayWeek, dayCourses)
                 })
             }
         }

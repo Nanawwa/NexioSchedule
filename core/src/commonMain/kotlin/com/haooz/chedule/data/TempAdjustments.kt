@@ -1,5 +1,8 @@
 package com.haooz.chedule.data
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.datetime.Clock
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.isoDayNumber
@@ -39,6 +42,21 @@ object TempAdjustments {
     const val PREFS = "temp_adjustments"
     private const val KEY_PREFIX = "day_"
     private const val KEY_INDEX = "dates"
+    private const val KEY_REVISION = "revision"
+
+    /**
+     * 改动版本号。任何写操作都会 bump 它。
+     *
+     * 课表页那些按周预计算的 `remember` 没有临时调课这一维的 key，
+     * 只靠 `dataVersion`（课表变更）不会重算 —— 结果就是改了课、当天页变了，
+     * 周课表页还是老样子。页面把它当 remember key 就能自动跟随。
+     */
+    private val _revision = MutableStateFlow(0L)
+    val revision: StateFlow<Long> = _revision.asStateFlow()
+
+    private fun bumpRevision() {
+        _revision.value = _revision.value + 1
+    }
 
     /** 一条临时改动。 */
     sealed interface Change {
@@ -189,11 +207,32 @@ object TempAdjustments {
             }
         }
         syncIndex(date, present = changes.isNotEmpty())
+        persistRevision()
+        bumpRevision()
     }
 
     fun clear(date: LocalDate) {
         store().edit { remove(KEY_PREFIX + date.toString()) }
         syncIndex(date, present = false)
+        persistRevision()
+        bumpRevision()
+    }
+
+    /**
+     * 跨进程/冷启动恢复版本号：内存里的 revision 每次启动都从 0 开始，
+     * 若不落盘，第一次进页面时 key 与上一轮相同，改动可能被 `remember` 吃掉。
+     */
+    private fun persistRevision() {
+        val next = _revision.value + 1
+        runCatching { store().edit { putLong(KEY_REVISION, next) } }
+        _revision.value = next
+    }
+
+    /** 启动时把落盘的版本号读回内存，页面首次组合就能用正确的 key。 */
+    fun restoreRevision() {
+        if (!AppStorage.isReady) return
+        val stored = runCatching { store().getLong(KEY_REVISION, 0L) }.getOrDefault(0L)
+        if (stored > _revision.value) _revision.value = stored
     }
 
     /**
@@ -212,6 +251,10 @@ object TempAdjustments {
         // 索引重建成「仍在存储里的日期」，顺带修掉两者不同步
         val remaining = stored.filter { it >= today }.toSet()
         if (remaining != indexedDates()) writeIndex(remaining)
+        if (stale.isNotEmpty()) {
+            persistRevision()
+            bumpRevision()
+        }
         return stale.size
     }
 
