@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class BreakCountdownTest {
 
@@ -180,5 +181,36 @@ class BreakCountdownTest {
         assertEquals(1, breaks.size)
         assertEquals(at(10, 10), breaks[0].startMillis)
         assertEquals(at(10, 20), breaks[0].endMillis)
+    }
+
+    @Test
+    fun `超过一小时的间隔算午休不算课间`() {
+        val noonTimes = mapOf(
+            4 to "11:15-12:00",
+            5 to "14:00-14:45",
+        )
+        val courses = listOf(course(4, 4, "上午第四节"), course(5, 5, "下午第一节"))
+        val breaks = BreakCountdown.breaks(courses, noonTimes, dayStart)
+        assertTrue(breaks.isEmpty())
+    }
+
+    @Test
+    fun `恰好一小时的课间仍然算数`() {
+        val times = mapOf(
+            4 to "11:15-12:00",
+            5 to "13:00-13:45",
+        )
+        val courses = listOf(course(4, 4, "上午第四节"), course(5, 5, "下午第一节"))
+        assertEquals(1, BreakCountdown.breaks(courses, times, dayStart).size)
+    }
+
+    @Test
+    fun `午休时段不会被 find 认成课间`() {
+        val noonTimes = mapOf(
+            4 to "11:15-12:00",
+            5 to "14:00-14:45",
+        )
+        val courses = listOf(course(4, 4, "上午第四节"), course(5, 5, "下午第一节"))
+        assertNull(BreakCountdown.find(courses, noonTimes, dayStart, at(13, 0)))
     }
 }

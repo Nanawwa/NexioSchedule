@@ -81,14 +81,28 @@ fun TempAdjustScreen(
     val horizontalPadding = if (isTablet) 20.dp else 16.dp
     val haptic = LocalHapticFeedback.current
 
-    // 该日解析结果已叠加调休与临时调课 —— 与今日页、小组件、提醒走同一条链路
-    val courses = remember(selectedDate, refreshKey) {
+    // 基准课表（不叠加临时调课）+ 当天规则 → 显示列表。
+    // 已停上的课在 apply 后会被删掉，这里再把它们补回列表，
+    // 否则「停上」之后就再也找不到恢复入口了。
+    val (baseCourses, courses, changes) = remember(selectedDate, refreshKey) {
         runCatching {
-            DayScheduleResolver.resolveDaySchedule(selectedDate, repository).courses
-        }.getOrDefault(emptyList())
-    }
-    val changes = remember(selectedDate, refreshKey) {
-        TempAdjustments.load(selectedDate)
+            val changes = TempAdjustments.load(selectedDate)
+            val base = DayScheduleResolver.resolveDaySchedule(
+                selectedDate,
+                repository,
+                tempChanges = emptyList(),
+            ).courses
+            val resolved = TempAdjustments.apply(base, changes)
+            val cancelledIds = changes
+                .filterIsInstance<TempAdjustments.Change.Cancel>()
+                .map { it.courseId }
+                .toSet()
+            val display = (resolved + base.filter { it.id in cancelledIds })
+                .sortedWith(compareBy({ it.startSection }, { it.name }))
+            Triple(base, display, changes)
+        }.getOrElse {
+            Triple(emptyList<Course>(), emptyList<Course>(), emptyList())
+        }
     }
 
     /** 重新读数据并通知宿主刷新提醒 / 小组件 */
@@ -152,24 +166,35 @@ fun TempAdjustScreen(
             val moved = changes.any {
                 it is TempAdjustments.Change.Move && it.courseId == course.id
             }
+            val tempAdded = changes.any {
+                it is TempAdjustments.Change.Add && TempAdjustments.identityOf(it) == course.id
+            }
             CourseAdjustCard(
                 course = course,
                 cancelled = cancelled,
                 moved = moved,
+                tempAdded = tempAdded,
                 onAdjust = { editing = course to selectedDate },
                 onToggleCancel = {
                     haptic.performHapticFeedback(HapticFeedbackType.Confirm)
-                    val others = TempAdjustments.load(selectedDate).filter {
-                        when (it) {
-                            is TempAdjustments.Change.Cancel -> it.courseId != course.id
-                            is TempAdjustments.Change.Move -> it.courseId != course.id
-                            is TempAdjustments.Change.Add -> true
+                    val current = TempAdjustments.load(selectedDate)
+                    // 先摘掉这门课自己的规则，再按语义写回
+                    val others = current.filterNot { change ->
+                        when (change) {
+                            is TempAdjustments.Change.Cancel -> change.courseId == course.id
+                            is TempAdjustments.Change.Move -> change.courseId == course.id
+                            // 临时加课没有「停上」，只有「删除」：直接从规则里移除
+                            is TempAdjustments.Change.Add ->
+                                tempAdded && TempAdjustments.identityOf(change) == course.id
                         }
                     }
                     TempAdjustments.save(
                         selectedDate,
-                        if (cancelled) others
-                        else others + TempAdjustments.Change.Cancel(course.id),
+                        when {
+                            cancelled -> others                 // 恢复
+                            tempAdded -> others                 // 删除临时课
+                            else -> others + TempAdjustments.Change.Cancel(course.id)
+                        },
                     )
                     reload()
                 },
@@ -204,6 +229,7 @@ fun TempAdjustScreen(
 
     TempAdjustDialog(
         target = editing,
+        baseCourses = baseCourses,
         onDismiss = { editing = null },
         onSaved = {
             editing = null
@@ -315,6 +341,7 @@ private fun CourseAdjustCard(
     course: Course,
     cancelled: Boolean,
     moved: Boolean,
+    tempAdded: Boolean,
     onAdjust: () -> Unit,
     onToggleCancel: () -> Unit,
 ) {
@@ -359,6 +386,8 @@ private fun CourseAdjustCard(
 
             val status = when {
                 cancelled -> "今天已停上"
+                tempAdded && moved -> "临时课，已调整节次或教室"
+                tempAdded -> "临时添加，只在这一天"
                 moved -> "已调整节次或教室"
                 else -> null
             }
@@ -381,7 +410,11 @@ private fun CourseAdjustCard(
                     modifier = Modifier.weight(1f),
                 )
                 TextButton(
-                    text = if (cancelled) "恢复" else "停上",
+                    text = when {
+                        cancelled -> "恢复"
+                        tempAdded -> "删除"
+                        else -> "停上"
+                    },
                     onClick = onToggleCancel,
                     textColor = if (cancelled) {
                         MiuixTheme.colorScheme.primary
@@ -494,6 +527,7 @@ private fun TempAdjustAddDialog(
                                 classroom = classroom.trim(),
                                 startSection = startSection,
                                 endSection = endSection,
+                                id = TempAdjustments.newAddId(),
                             ),
                         )
                         onSaved()

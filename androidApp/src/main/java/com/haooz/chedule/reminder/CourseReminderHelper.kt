@@ -1165,13 +1165,19 @@ object CourseReminderHelper {
         beforeExclusion = beforeExclusion,
     )
 
-    /** 节假日/调休数据变更后：重排提醒并立即刷新已放置的小部件 */
+    /**
+     * 节假日/调休/临时调课变更后：重排提醒、刷新小部件、把新的一天推给手表。
+     *
+     * 临时调课改的是「今天」的课，手表上的「现在/下一节」必须同步，
+     * 否则手机上已经停上的课还会在手表上倒计时。
+     */
     fun onHolidayDataChanged(context: Context) {
         startReminderService(context)
         reconcileActiveHolidayCourse(context)
         ClassDndHelper.applyCurrentState(context)
         com.haooz.chedule.provider.TodayCoursesProvider.notifyScheduleChanged(context)
         WidgetUpdateCache.updateInstalledWidgets(context)
+        com.haooz.chedule.wearable.WearScheduleSync.pushToday(context, "schedule-changed")
     }
 
     /** Remove a real ongoing course notification when holiday changes no longer resolve it for today. */

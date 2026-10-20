@@ -86,6 +86,12 @@ object DayScheduleResolver {
         date: LocalDate,
         repository: CourseRepository,
         holidayEntriesByYear: Map<Int, List<HolidayEntry>>? = null,
+        /**
+         * 临时调课规则。`null` = 用存储里的当天规则（正常业务路径）；
+         * 传 `emptyList()` 可以拿到「未叠加调课」的基准课表，
+         * 临时调课页面靠它把已停上的课也留在列表里，否则无法恢复。
+         */
+        tempChanges: List<TempAdjustments.Change>? = null,
     ): DayScheduleResolution {
         val calendarDay = date.dayOfWeek.isoDayNumber
         val entriesByYear = holidayEntriesByYear ?: HolidayManager.loadAllByYear()
@@ -134,6 +140,7 @@ object DayScheduleResolver {
                 repository.getMorningSections() +
                     repository.getAfternoonSections() + repository.getEveningSections()
             },
+            tempChanges = tempChanges ?: TempAdjustments.load(date),
         )
     }
 

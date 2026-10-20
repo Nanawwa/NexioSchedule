@@ -1,5 +1,6 @@
 package com.haooz.chedule.data
 
+import kotlinx.datetime.Clock
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.isoDayNumber
 import kotlinx.serialization.json.Json
@@ -52,7 +53,15 @@ object TempAdjustments {
             val startSection: Int,
             val endSection: Int,
             val classroom: String? = null,
+            /** 旧字段：老数据只有布尔值，位移按「相对原始课表」推导 */
             val shiftFollowing: Boolean = false,
+            /**
+             * 编辑当时用户看到的位移（相对当前显示的节次），优先于推导值。
+             *
+             * 一节课被移动过以后再编辑，用户是「从挪到的位置再挪 N 节」，
+             * 而原始课表已经不知道这回事了；只有记下这个 N 才不会重复平移。
+             */
+            val shiftBy: Int? = null,
         ) : Change
 
         /** 当天某节课停上。 */
@@ -67,11 +76,20 @@ object TempAdjustments {
             /** 非空时按自定义时间展示，优先于节次时间 */
             val startTime: String? = null,
             val endTime: String? = null,
+            /**
+             * 稳定身份。没有它的话两节同名同节的临时课会生成相同 id：
+             * LazyColumn 的 key 撞车直接崩，取消/改时间也无从对应。
+             */
+            val id: String = "",
         ) : Change
     }
 
     /**
-     * 把改动叠加到某天的课程列表上。
+     * 把改动叠加到某天的**基准课表**上。
+     *
+     * ⚠ 入参必须是未经调课的原始课程（`DayScheduleResolver` 里
+     * `tempChanges = emptyList()` 那条路径），不是已经叠加过调课的结果 ——
+     * 顺延的「后面的课」正是按基准节次判定的。
      *
      * 顺序：先取消，再移动，最后加课 —— 移动和新增互不影响，
      * 取消必须最先执行，否则被取消的课会被移动规则「复活」。
@@ -82,22 +100,27 @@ object TempAdjustments {
         val cancelled = changes.filterIsInstance<Change.Cancel>().map { it.courseId }.toSet()
         val moves = changes.filterIsInstance<Change.Move>().associateBy { it.courseId }
 
-        // 顺延的位移量永远以「原始课表」为基准计算。
-        // 如果拿已经叠加过 Move 的结果再算一次，用户改两回时间就会平移两倍。
+        // 临时加课也是「当天的课」：先并进列表，取消/改时间才能作用在它身上。
+        // 之前把 Add 放在最后追加，导致给临时课点「停上」或「改时间」完全没反应。
+        val all = courses + changes.filterIsInstance<Change.Add>()
+            .map { it.toCourse(courses.firstOrNull()?.dayOfWeek ?: 1) }
+
+        // 顺延的位移量优先用编辑时记下的 shiftBy（相对用户当时看到的位置）；
+        // 老数据没有该字段，才退回按「原始课表」推导。
         val shifts = mutableMapOf<String, Int>()
-        for (move in changes.filterIsInstance<Change.Move>()) {
-            if (!move.shiftFollowing) continue
-            val anchor = courses.firstOrNull { it.id == move.courseId } ?: continue
-            val delta = move.startSection - anchor.startSection
+        for (move in moves.values) {
+            if (move.shiftBy == null && !move.shiftFollowing) continue
+            val anchor = all.firstOrNull { it.id == move.courseId } ?: continue
+            val delta = move.shiftBy ?: (move.startSection - anchor.startSection)
             if (delta == 0) continue
-            courses.asSequence()
+            all.asSequence()
                 .filter { it.id != anchor.id && it.startSection > anchor.endSection }
                 .forEach { later ->
                     shifts[later.id] = (shifts[later.id] ?: 0) + delta
                 }
         }
 
-        val kept = courses
+        return all
             .filter { it.id !in cancelled }
             .map { course ->
                 val move = moves[course.id]
@@ -114,20 +137,22 @@ object TempAdjustments {
                 val end = (course.endSection + shift).coerceAtLeast(start)
                 course.copy(startSection = start, endSection = end)
             }
-            .toMutableList()
-
-        for (add in changes.filterIsInstance<Change.Add>()) {
-            kept += add.toCourse(courses.firstOrNull()?.dayOfWeek ?: 1)
-        }
-
-        // 调课可能把课挪乱，按节次重新排一遍，保持解析结果的既有约定
-        return kept.sortedWith(compareBy({ it.startSection }, { it.name }))
+            // 调课可能把课挪乱，按节次重新排一遍，保持解析结果的既有约定
+            .sortedWith(compareBy({ it.startSection }, { it.name }))
     }
+
+    /** 给临时加课生成一个不会撞的身份。 */
+    fun newAddId(): String =
+        "temp-${Clock.System.now().toEpochMilliseconds()}-${(0..9999).random()}"
+
+    /** 临时加课在当天课程列表里的最终 id（老数据没有显式 id 时按原规则推导）。 */
+    fun identityOf(add: Change.Add): String =
+        add.id.ifBlank { "temp-${add.name.hashCode()}-${add.startSection}" }
 
     private fun Change.Add.toCourse(dayOfWeek: Int): Course {
         val hasTime = !startTime.isNullOrBlank() && !endTime.isNullOrBlank()
         return Course(
-            id = "temp-${name.hashCode()}-$startSection",
+            id = identityOf(this),
             name = name,
             classroom = classroom,
             teacher = "",
@@ -219,6 +244,7 @@ object TempAdjustments {
                                 put("endSection", change.endSection)
                                 change.classroom?.let { put("classroom", it) }
                                 if (change.shiftFollowing) put("shiftFollowing", true)
+                                change.shiftBy?.let { put("shiftBy", it) }
                             }
 
                             is Change.Cancel -> {
@@ -234,6 +260,7 @@ object TempAdjustments {
                                 put("endSection", change.endSection)
                                 change.startTime?.let { put("startTime", it) }
                                 change.endTime?.let { put("endTime", it) }
+                                if (change.id.isNotEmpty()) put("id", change.id)
                             }
                         }
                     }
@@ -258,6 +285,7 @@ object TempAdjustments {
                         endSection = end,
                         classroom = obj.str("classroom"),
                         shiftFollowing = obj.bool("shiftFollowing") == true,
+                        shiftBy = obj.int("shiftBy"),
                     )
                 }
 
@@ -274,6 +302,7 @@ object TempAdjustments {
                         endSection = end,
                         startTime = obj.str("startTime"),
                         endTime = obj.str("endTime"),
+                        id = obj.str("id").orEmpty(),
                     )
                 }
 

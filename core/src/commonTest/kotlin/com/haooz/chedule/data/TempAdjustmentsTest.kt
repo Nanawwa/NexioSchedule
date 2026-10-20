@@ -159,6 +159,72 @@ class TempAdjustmentsTest {
     }
 
     @Test
+    fun `临时加的课也能被停上`() {
+        val added = TempAdjustments.Change.Add(
+            name = "讲座", classroom = "B101", startSection = 7, endSection = 8, id = "temp-x",
+        )
+        val resolved = TempAdjustments.apply(listOf(course("a", start = 1, end = 2)), listOf(added))
+        val addedId = TempAdjustments.identityOf(added)
+        val afterCancel = TempAdjustments.apply(
+            resolved,
+            listOf(added, TempAdjustments.Change.Cancel(addedId)),
+        )
+        assertTrue(afterCancel.none { it.id == addedId })
+    }
+
+    @Test
+    fun `两节同名同节的临时课不会撞 id`() {
+        val first = TempAdjustments.Change.Add("临时加课", "B101", 7, 8, id = "temp-1")
+        val second = TempAdjustments.Change.Add("临时加课", "B102", 7, 8, id = "temp-2")
+        val resolved = TempAdjustments.apply(emptyList(), listOf(first, second))
+        assertEquals(2, resolved.size)
+        assertEquals(2, resolved.map { it.id }.distinct().size)
+    }
+
+    @Test
+    fun `老数据没有 id 时仍能稳定对上`() {
+        val legacy = TempAdjustments.Change.Add("讲座", "B101", 7, 8)
+        val resolved = TempAdjustments.apply(emptyList(), listOf(legacy))
+        assertEquals(TempAdjustments.identityOf(legacy), resolved.single().id)
+    }
+
+    @Test
+    fun `位移按累计值平移后面的课`() {
+        val courses = listOf(course("a", start = 3, end = 4), course("b", start = 5, end = 6))
+        // 相对基准从第3节挪到第6节，累计位移 +3
+        val change = TempAdjustments.Change.Move(
+            "a", startSection = 6, endSection = 7, shiftBy = 3,
+        )
+        val result = TempAdjustments.apply(courses, listOf(change)).associateBy { it.id }
+        assertEquals(6, result.getValue("a").startSection)
+        assertEquals(8, result.getValue("b").startSection)
+    }
+
+    @Test
+    fun `从已挪动的位置继续往后挪时累计位移`() {
+        val base = listOf(course("a", start = 3, end = 4), course("b", start = 5, end = 6))
+        // 第一次 3 → 5
+        val first = TempAdjustments.apply(base, listOf(TempAdjustments.Change.Move("a", 5, 6, shiftBy = 2)))
+        assertEquals(5, first.first { it.id == "a" }.startSection)
+        assertEquals(7, first.first { it.id == "b" }.startSection)
+        // 弹窗此时显示第5节，用户再往后挪 1 节 → 累计位移变成 +3
+        val second = TempAdjustments.apply(
+            base,
+            listOf(TempAdjustments.Change.Move("a", 6, 7, shiftBy = 3)),
+        )
+        assertEquals(6, second.first { it.id == "a" }.startSection)
+        assertEquals(8, second.first { it.id == "b" }.startSection)
+    }
+
+    @Test
+    fun `没有位移记录的老数据仍按原始课表推导`() {
+        val courses = listOf(course("a", start = 3, end = 4), course("b", start = 5, end = 6))
+        val change = TempAdjustments.Change.Move("a", startSection = 5, endSection = 6, shiftFollowing = true)
+        val result = TempAdjustments.apply(courses, listOf(change)).associateBy { it.id }
+        assertEquals(7, result.getValue("b").startSection)
+    }
+
+    @Test
     fun `加课进入当天列表`() {
         val courses = listOf(course("a"))
         val result = TempAdjustments.apply(

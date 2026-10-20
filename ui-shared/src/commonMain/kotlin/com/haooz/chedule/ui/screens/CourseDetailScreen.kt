@@ -709,13 +709,40 @@ internal fun TempAdjustDialog(
     target: Pair<Course, LocalDate>?,
     onDismiss: () -> Unit,
     onSaved: () -> Unit,
+    /**
+     * 当天**未叠加临时调课**的基准课表。顺延位移必须以它为基准计算，
+     * 否则对一节课反复编辑会一次比一次偏得更远。不传时自行解析。
+     */
+    baseCourses: List<Course>? = null,
 ) {
     if (target == null) return
     val course = target.first
     val date = target.second
-    var classroom by remember(course.id, date) { mutableStateOf(course.classroom) }
-    var startSection by remember(course.id, date) { mutableIntStateOf(course.startSection) }
-    var endSection by remember(course.id, date) { mutableIntStateOf(course.endSection) }
+    val baseStartSection = remember(course.id, date, baseCourses) {
+        baseCourses?.firstOrNull { it.id == course.id }?.startSection
+            ?: runCatching {
+                DayScheduleResolver.resolveDaySchedule(
+                    date,
+                    CourseRepository(),
+                    tempChanges = emptyList(),
+                ).courses.firstOrNull { it.id == course.id }?.startSection
+            }.getOrNull()
+            ?: course.startSection
+    }
+    // 这节课当天可能已经被挪过：弹窗必须从「当前生效的位置」开始，
+    // 否则用户看到的还是原始节次，保存后又会按原始位置重算一遍位移。
+    val existingMove = remember(course.id, date) {
+        TempAdjustments.load(date)
+            .filterIsInstance<TempAdjustments.Change.Move>()
+            .firstOrNull { it.courseId == course.id }
+    }
+    val effectiveStart = existingMove?.startSection ?: course.startSection
+    val effectiveEnd = existingMove?.endSection ?: course.endSection
+    val effectiveClassroom = existingMove?.classroom ?: course.classroom
+
+    var classroom by remember(course.id, date) { mutableStateOf(effectiveClassroom) }
+    var startSection by remember(course.id, date) { mutableIntStateOf(effectiveStart) }
+    var endSection by remember(course.id, date) { mutableIntStateOf(effectiveEnd) }
     val existing = remember(course.id, date) {
         TempAdjustments.load(date)
             .filterIsInstance<TempAdjustments.Change.Cancel>()
@@ -723,16 +750,23 @@ internal fun TempAdjustDialog(
     }
 
     // 顺延要作用于「这节课之后的课」，所以得知道当天还有哪几节。
-    // 这里只做一次解析（弹窗生命周期内不变），失败时按没有后续课处理。
-    val dayCourses = remember(course.id, date) {
-        runCatching {
-            DayScheduleResolver.resolveDaySchedule(date, CourseRepository()).courses
+    val resolvedDayCourses = remember(course.id, date, baseCourses) {
+        val base = baseCourses ?: runCatching {
+            DayScheduleResolver.resolveDaySchedule(
+                date,
+                CourseRepository(),
+                tempChanges = emptyList(),
+            ).courses
         }.getOrDefault(emptyList())
+        TempAdjustments.apply(base, TempAdjustments.load(date))
     }
     var shiftFollowing by remember(course.id, date) { mutableStateOf(false) }
-    val sectionDelta = startSection - course.startSection
-    val followingCount = dayCourses.count {
-        it.id != course.id && it.startSection > course.endSection
+    // 顺延位移记「相对基准课表的累计位移」：重复编辑时是 3→5→6，
+    // 存成 +3 才能让后面的课跟着从基准位置平移 +3，而不是每次只挪 1。
+    val cumulativeShift = startSection - baseStartSection
+    val sectionDelta = startSection - effectiveStart
+    val followingCount = resolvedDayCourses.count {
+        it.id != course.id && it.startSection > effectiveEnd
     }
 
     // 先摘掉这门课当天已有的规则再叠加，避免同一节课存下多条互相矛盾
@@ -849,26 +883,34 @@ internal fun TempAdjustDialog(
             TextButton(
                 text = "保存调整",
                 onClick = {
-                    val moved = startSection != course.startSection ||
-                        endSection != course.endSection ||
-                        classroom != course.classroom
+                    val changed = startSection != effectiveStart ||
+                        endSection != effectiveEnd ||
+                        classroom != effectiveClassroom
+                    // 什么都没改就点保存：直接关掉，不要把已有的调课规则清空
+                    if (!changed) {
+                        onDismiss()
+                        return@TextButton
+                    }
                     commit(
-                        if (moved) {
-                            TempAdjustments.Change.Move(
-                                courseId = course.id,
-                                startSection = startSection,
-                                endSection = endSection,
-                                classroom = classroom.ifBlank { null },
-                                shiftFollowing = shiftFollowing && sectionDelta != 0,
-                            )
-                        } else {
-                            null
-                        }
+                        TempAdjustments.Change.Move(
+                            courseId = course.id,
+                            startSection = startSection,
+                            endSection = endSection,
+                            classroom = classroom.ifBlank { null },
+                            shiftBy = cumulativeShift.takeIf { shiftFollowing && it != 0 },
+                        )
                     )
                 },
                 colors = ButtonDefaults.textButtonColorsPrimary(),
                 modifier = Modifier.fillMaxWidth(),
             )
+            if (existingMove != null) {
+                TextButton(
+                    text = "恢复原始节次",
+                    onClick = { commit(null) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
             TextButton(
                 text = if (existing) "恢复这节课" else "本次停上",
                 onClick = {

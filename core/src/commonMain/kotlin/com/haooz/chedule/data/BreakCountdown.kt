@@ -11,6 +11,15 @@ package com.haooz.chedule.data
  */
 object BreakCountdown {
 
+    /**
+     * 课间的时长上限（毫秒）。
+     *
+     * 没有这个上限时，12:00 下课、14:00 上课的两小时午休也会被算成「课间」，
+     * 于是下课时挂出「课间 / 距离上课 2 小时」的岛 —— 既不是课间，用户也
+     * 不需要为一个两小时后的课上心。超过上限一律当作「没课的那段时间」。
+     */
+    const val MAX_BREAK_MILLIS = 60 * 60_000L
+
     /** 一次课间。 */
     data class Break(
         /** 上一节刚结束的课 */
@@ -57,6 +66,8 @@ object BreakCountdown {
             val breakStart = dayStartMillis + previousEnd
             val breakEnd = dayStartMillis + nextStart
             if (breakEnd <= breakStart) continue
+            // 午休、跨中午的大段空档不是课间
+            if (breakEnd - breakStart > MAX_BREAK_MILLIS) continue
             result += Break(previous, next, breakStart, breakEnd)
         }
         return result
