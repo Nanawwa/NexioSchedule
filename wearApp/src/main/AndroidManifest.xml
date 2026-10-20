@@ -31,14 +31,16 @@
                 android:name="android.support.wearable.complications.SUPPORTED_TYPES"
                 android:value="SHORT_TEXT,LONG_TEXT,RANGED_VALUE,ICON,SMALL_IMAGE,LARGE_IMAGE,GOAL_PROGRESS,WEIGHTED_ELEMENTS" />
             <!--
-              WFF 表盘（三星 One UI Watch 的自家表盘都是 WFF）挑数据源时还会看
-              这份「安全表盘可用类型」：表盘声明自己能在 AOD 下工作，系统只列出
-              在这里登记过的类型。只填 SUPPORTED_TYPES 时圆形小槽能选到我们、
-              中央大槽却整项消失，漏的就是这个键。
+              用旧版 wire 名（ICON / LARGE_IMAGE）而不是枚举名，因为系统解析的是
+              旧常量字符串。AndroidX 的映射见 ComplicationType.kt：
+                MONOCHROMATIC_IMAGE -> TYPE_ICON        -> "ICON"
+                PHOTO_IMAGE         -> TYPE_LARGE_IMAGE -> "LARGE_IMAGE"
+              GOAL_PROGRESS / WEIGHTED_ELEMENTS 两边的名字一致，直接写即可。
+
+              另注：不要加 SAFE_WATCH_FACE_SUPPORTED_TYPES —— 它只对
+              SAFE_WATCH_FACES 名单里的表盘生效，且需要特权权限
+              GET_IS_FOR_SAFE_WATCH_FACE，和「中央大槽能不能选到我们」无关。
             -->
-            <meta-data
-                android:name="androidx.wear.watchface.complications.datasource.SAFE_WATCH_FACE_SUPPORTED_TYPES"
-                android:value="SHORT_TEXT,LONG_TEXT,RANGED_VALUE,ICON,SMALL_IMAGE,LARGE_IMAGE,GOAL_PROGRESS,WEIGHTED_ELEMENTS" />
             <meta-data
                 android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
                 android:value="0" />

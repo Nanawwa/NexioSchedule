@@ -47,10 +47,17 @@ android {
         compose = true
     }
 
+    // WatchState 的判定是纯 Kotlin（不碰 Android API），用宿主 JVM 单测覆盖。
+    // 表盘渲染依赖 Icon/Canvas/PendingIntent，只能在设备上验证，不放这里。
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
     // Compose 由 Kotlin 2.x 的 compose 编译器插件处理，无需 composeOptions
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     // 表盘 complication 数据源
     implementation("androidx.wear:wear:1.4.0")
     // ⚠ 用 androidx.wear.watchface 这一套，不是 androidx.wear.complications。
