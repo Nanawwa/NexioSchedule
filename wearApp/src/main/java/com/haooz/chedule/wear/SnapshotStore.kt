@@ -16,6 +16,17 @@ object SnapshotStore {
 
     private const val PREFS = "wear_snapshot"
 
+    /**
+     * 用设备加密存储（DE）而不是默认的凭据加密存储（CE）。
+     *
+     * 数据源声明了 `directBootAware`：解锁前（直接启动阶段）系统就可能来取数据，
+     * 那时 CE 存储还没挂载，`getSharedPreferences` 会抛 IllegalStateException。
+     * 课表不是敏感数据，放 DE 没有额外风险。
+     */
+    private fun prefs(context: Context) =
+        context.createDeviceProtectedStorageContext()
+            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
     fun save(context: Context, snapshot: TodaySnapshot) {
         val map = DataMap().apply {
             putLong("sentAt", snapshot.sentAtMillis)
@@ -30,14 +41,14 @@ object SnapshotStore {
             }
         }
         val bytes = map.toByteArray()
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+        prefs(context).edit()
             .putString("payload", android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
             .apply()
     }
 
     fun load(context: Context): TodaySnapshot {
-        val encoded = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString("payload", null) ?: return TodaySnapshot.empty()
+        val encoded = runCatching { prefs(context).getString("payload", null) }.getOrNull()
+            ?: return TodaySnapshot.empty()
         return runCatching {
             val bytes = android.util.Base64.decode(encoded, android.util.Base64.NO_WRAP)
             val map = DataMap.fromByteArray(bytes)

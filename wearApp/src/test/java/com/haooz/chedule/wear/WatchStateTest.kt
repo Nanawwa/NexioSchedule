@@ -90,4 +90,23 @@ class WatchStateTest {
         assertTrue(s.resolve(0L, 8.2 * 60) is WatchState.InClass)
         assertTrue(s.resolve(0L, 9.5 * 60) is WatchState.Done)
     }
+
+    @Test
+    fun `快照过期时提示同步而不是显示旧课`() {
+        val sentAt = 1_700_000_000_000L
+        val snap = TodaySnapshot(
+            listOf(WatchCourse("旧课", "A101", "张老师", 8 * 60, 9 * 60, "第1节")),
+            sentAtMillis = sentAt,
+        )
+        // 刚推送：正常按课表判定
+        assertTrue(snap.resolve(sentAt + 60_000L, 8.5 * 60) is WatchState.InClass)
+        // 超过 12 小时：旧课表不可信，应该提示同步
+        val stale = snap.resolve(sentAt + TodaySnapshot.STALE_AFTER_MS + 1, 8.5 * 60)
+        assertTrue("过期快照应返回 NoData", stale is WatchState.NoData)
+    }
+
+    @Test
+    fun `没有时间戳的空快照仍然是NoData`() {
+        assertTrue(TodaySnapshot.empty().resolve(0L, 10.0 * 60) is WatchState.NoData)
+    }
 }

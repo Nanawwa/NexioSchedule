@@ -141,11 +141,14 @@ object ComplicationRenderer {
         isPreview: Boolean,
     ): ComplicationData {
         val unit = if (settings.preciseCountdown) TimeUnit.SECONDS else null
+        // 小圆槽在多数表盘上只画主文本（标题常常被省略）。所以主文本必须自解释：
+        // 倒计时单独一个「25分」放在槽里，用户根本不知道在数什么。
+        // 这里一律带上语境（课名 / 「距上课」），把纯数字留给大槽和进度环。
         val (main, title, description) = when (state) {
             is WatchState.InClass -> Triple(
-                if (isPreview) text("25分") else countdown(
+                if (isPreview) text("高数 25分") else countdownWithLabel(
                     nowMillis + state.remainToEndMillis,
-                    TimeDifferenceStyle.SHORT_SINGLE_UNIT,
+                    "${shortName(state.course.name)} ^1",
                     unit,
                 ),
                 text(state.course.name),
@@ -154,17 +157,16 @@ object ComplicationRenderer {
 
             is WatchState.OnBreak -> {
                 if (!settings.breakCountdown) {
-                    // 关了课间倒计时：直接显示上课时刻，不再跳数字
                     Triple(
+                        text(shortName(state.next.name)),
                         text(clockOf(state.next.startMinute)),
-                        text(state.next.name),
                         "下一节 ${state.next.name} ${clockOf(state.next.startMinute)}",
                     )
                 } else {
                     Triple(
-                        if (isPreview) text("10分") else countdown(
+                        if (isPreview) text("英语 10分") else countdownWithLabel(
                             nowMillis + state.remainToStartMillis,
-                            TimeDifferenceStyle.SHORT_SINGLE_UNIT,
+                            "${shortName(state.next.name)} ^1",
                             unit,
                         ),
                         text(state.next.name),
@@ -174,13 +176,34 @@ object ComplicationRenderer {
             }
 
             WatchState.Done -> Triple(text("没课"), text("今天"), "今天没有课了")
-            WatchState.NoData -> Triple(text("同步"), text("Nexio"), "还没收到课表，点一下同步")
+            WatchState.NoData -> Triple(text("待同步"), text("Nexio"), "还没收到课表，点一下同步")
         }
         return ShortTextComplicationData.Builder(main, text(description))
             .setTitle(title)
             .setTapAction(tapIntent(context))
             .build()
     }
+
+    /**
+     * 小槽位能塞下的课名：CJK 按 2 个半角宽算，总宽超过 [SHORT_NAME_WIDTH] 时截断。
+     *
+     * 小圆槽大约放得下 5~7 个汉字，再长就会被系统从尾部硬截 ——
+     * 而倒计时通常在后面，先截课名反而保住了关键信息。
+     */
+    private fun shortName(name: String): String {
+        if (name.isEmpty()) return name
+        var width = 0
+        val out = StringBuilder()
+        for (ch in name) {
+            val w = if (ch.code > 0x2E80) 2 else 1
+            if (width + w > SHORT_NAME_WIDTH) break
+            width += w
+            out.append(ch)
+        }
+        return out.toString()
+    }
+
+    private const val SHORT_NAME_WIDTH = 8
 
     // ── LONG_TEXT：大槽位 / 矩形槽 ───────────────────────────────────────────
 

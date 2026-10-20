@@ -23,6 +23,16 @@ data class TodaySnapshot(
 
         fun empty(sentAtMillis: Long = 0L) = TodaySnapshot(emptyList(), sentAtMillis)
     }
+
+    /**
+     * 快照是否已经过期。
+     *
+     * 手机端只在应用启动 / 课表变更时推送，如果用户一整天没开过手机 App，
+     * 手表上留着的可能是昨天的数据。过期后不应再拿着旧课表显示「正在上课」，
+     * 否则用户看到的课名和时间都是错的 —— 比不显示更糟。
+     */
+    fun isStale(nowMillis: Long): Boolean =
+        sentAtMillis > 0L && nowMillis - sentAtMillis > STALE_AFTER_MS
 }
 
 /**
@@ -87,6 +97,9 @@ fun TodaySnapshot.resolve(nowMillis: Long, nowMinuteOfDay: Double): WatchState {
     // 没收到过任何快照 ≠ 今天没课。之前两者都返回 Done，界面就会出现
     // 「今天没课了」+「打开手机 App 同步一次」这种自相矛盾的提示。
     if (courses.isEmpty()) return if (sentAtMillis <= 0L) WatchState.NoData else WatchState.Done
+    // 快照太旧说明手机很久没推过：旧课表的课名/时间都可能已经不对，
+    // 提示同步比照着它显示「正在上某某课」更诚实。
+    if (isStale(nowMillis)) return WatchState.NoData
 
     // 正在上的课：取最先开始且尚未结束的那节
     val current = courses.firstOrNull { nowMinuteOfDay >= it.startMinute && nowMinuteOfDay < it.endMinute }

@@ -21,15 +21,13 @@
         <service
             android:name=".CourseComplicationService"
             android:exported="true"
-            android:icon="@mipmap/ic_launcher"
+            android:icon="@drawable/ic_complication_book"
             android:label="@string/complication_label"
+            android:directBootAware="true"
             android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
             <intent-filter>
                 <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
             </intent-filter>
-            <meta-data
-                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
-                android:value="SHORT_TEXT,LONG_TEXT,RANGED_VALUE,ICON,SMALL_IMAGE,LARGE_IMAGE,GOAL_PROGRESS,WEIGHTED_ELEMENTS" />
             <!--
               用旧版 wire 名（ICON / LARGE_IMAGE）而不是枚举名，因为系统解析的是
               旧常量字符串。AndroidX 的映射见 ComplicationType.kt：
@@ -37,13 +35,27 @@
                 PHOTO_IMAGE         -> TYPE_LARGE_IMAGE -> "LARGE_IMAGE"
               GOAL_PROGRESS / WEIGHTED_ELEMENTS 两边的名字一致，直接写即可。
 
+              RANGED_VALUE 的字符串就是 "RANGED_VALUE"（官方 KDoc 的表格里写成
+              RANGED_TEXT 是笔误，实际枚举与 wire 常量都是 RANGED_VALUE）。
+
               另注：不要加 SAFE_WATCH_FACE_SUPPORTED_TYPES —— 它只对
               SAFE_WATCH_FACES 名单里的表盘生效，且需要特权权限
               GET_IS_FOR_SAFE_WATCH_FACE，和「中央大槽能不能选到我们」无关。
+
+              android:icon 必须是单色白色矢量：它就是选择器里显示的那枚图标，
+              用彩色位图会渲染成实心块。平台会自己再叠一层 tint。
+            -->
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="SHORT_TEXT,LONG_TEXT,RANGED_VALUE,ICON,SMALL_IMAGE,LARGE_IMAGE,GOAL_PROGRESS,WEIGHTED_ELEMENTS" />
+            <!--
+              0 表示「只在挂载时请求一次」。我们靠 requestUpdateAll 主动推送，
+              但部分表盘/系统版本对主动推送不响应，于是同步完仍停在旧内容。
+              300 是系统允许的最小保底轮询周期，作为兜底。
             -->
             <meta-data
                 android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
-                android:value="0" />
+                android:value="300" />
         </service>
 
         <!--
