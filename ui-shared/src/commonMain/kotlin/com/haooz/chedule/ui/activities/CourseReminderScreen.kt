@@ -661,6 +661,12 @@ fun CourseReminderScreen(
                                 SwitchPreference(
                                     title = if (isHyperIsland) "小米超级岛" else "灵动岛",
                                     summary = when {
+                                        // 没有精确闹钟时系统会把闹钟丢进一小时窗口，
+                                        // 岛会「晚到」而不是不出现；这里必须说清楚原因，
+                                        // 否则用户只会看到「超级岛没用」。
+                                        islandNotification && isHyperIsland &&
+                                            !canScheduleExactAlarms ->
+                                            "已开启；精确闹钟未授权，提醒可能延迟"
                                         islandNotification && isHyperIsland ->
                                             "已开启，课程提醒将以超级岛样式显示"
                                         islandNotification ->
