@@ -225,6 +225,60 @@ class TempAdjustmentsTest {
     }
 
     @Test
+    fun `迁入的课出现在目标日`() {
+        val movedIn = TempAdjustments.Change.MovedIn(
+            courseId = "a",
+            name = "高数",
+            classroom = "博A201",
+            teacher = "王老师",
+            startSection = 3,
+            endSection = 4,
+        )
+        val result = TempAdjustments.apply(listOf(course("b")), listOf(movedIn))
+        val moved = result.first { it.id == "a" }
+        assertEquals("高数", moved.name)
+        assertEquals("博A201", moved.classroom)
+        assertEquals(3, moved.startSection)
+        assertEquals(2, result.size)
+    }
+
+    @Test
+    fun `迁入的课与原课同 id 时不会重复`() {
+        val movedIn = TempAdjustments.Change.MovedIn("a", "高数", "博A201", "", 3, 4)
+        // 目标日基准课表里刚好也有同 id 的课（源日那节没被取消时）
+        val result = TempAdjustments.apply(listOf(course("a", start = 1, end = 2)), listOf(movedIn))
+        assertEquals(1, result.count { it.id == "a" })
+    }
+
+    @Test
+    fun `迁入的课也能被停上`() {
+        val movedIn = TempAdjustments.Change.MovedIn("a", "高数", "博A201", "", 3, 4)
+        val resolved = TempAdjustments.apply(listOf(course("b")), listOf(movedIn))
+        val after = TempAdjustments.apply(
+            resolved,
+            listOf(movedIn, TempAdjustments.Change.Cancel("a")),
+        )
+        assertTrue(after.none { it.id == "a" })
+    }
+
+    @Test
+    fun `迁入的课存进去再读出来内容一致`() {
+        val movedIn = TempAdjustments.Change.MovedIn("a", "高数", "博A201", "王老师", 3, 4)
+        TempAdjustments.save(date, listOf(movedIn))
+        assertEquals(listOf(movedIn), TempAdjustments.load(date))
+    }
+
+    @Test
+    fun `迁入的课按节次参与排序`() {
+        val movedIn = TempAdjustments.Change.MovedIn("a", "晚课", "博A201", "", 9, 10)
+        val result = TempAdjustments.apply(
+            listOf(course("b", start = 1, end = 2), course("c", start = 5, end = 6)),
+            listOf(movedIn),
+        )
+        assertEquals(listOf("b", "c", "a"), result.map { it.id })
+    }
+
+    @Test
     fun `加课进入当天列表`() {
         val courses = listOf(course("a"))
         val result = TempAdjustments.apply(

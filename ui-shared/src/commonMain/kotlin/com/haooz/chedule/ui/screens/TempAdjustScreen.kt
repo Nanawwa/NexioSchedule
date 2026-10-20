@@ -76,6 +76,8 @@ fun TempAdjustScreen(
     var editing by remember { mutableStateOf<Pair<Course, LocalDate>?>(null) }
     var showAdd by remember { mutableStateOf(false) }
     var refreshKey by remember { mutableIntStateOf(0) }
+    // 跨天移动的输入错误提示
+    var moveError by remember { mutableStateOf<String?>(null) }
 
     val isTablet = isTabletWidth()
     val horizontalPadding = if (isTablet) 20.dp else 16.dp
@@ -110,6 +112,61 @@ fun TempAdjustScreen(
         refreshKey++
         onChanged()
     }
+
+    /**
+     * 把当前编辑的课挪到目标日期。
+     *
+     * 拆成两条规则存在两天：源日加「停上」（那节课从源日消失），
+     * 目标日加「迁入」（这节课在目标日出现）。这样每天的解析只读自己那天的规则，
+     * 不用为了找「有没有课从别处挪来」而把整个学期的规则全读一遍。
+     */
+    fun moveCourseToDate(target: Pair<Course, LocalDate>?, text: String) {
+        if (target == null) return
+        val (course, sourceDate) = target
+        val targetDate = parseMoveTargetDate(text, today)
+        if (targetDate == null) {
+            moveError = "日期看不懂，试试 10-21 或 2026-10-21"
+            return
+        }
+        if (targetDate == sourceDate) {
+            moveError = "目标日期和原来的是同一天"
+            return
+        }
+        moveError = null
+
+        // 源日：取消这节课
+        val sourceChanges = TempAdjustments.load(sourceDate).filterNot { change ->
+            when (change) {
+                is TempAdjustments.Change.Cancel -> change.courseId == course.id
+                is TempAdjustments.Change.Move -> change.courseId == course.id
+                is TempAdjustments.Change.MovedIn -> change.courseId == course.id
+                is TempAdjustments.Change.Add -> false
+            }
+        }
+        TempAdjustments.save(
+            sourceDate,
+            sourceChanges + TempAdjustments.Change.Cancel(course.id),
+        )
+
+        // 目标日：迁入这节课
+        val targetChanges = TempAdjustments.load(targetDate).filterNot { change ->
+            change is TempAdjustments.Change.MovedIn && change.courseId == course.id
+        }
+        TempAdjustments.save(
+            targetDate,
+            targetChanges + TempAdjustments.Change.MovedIn(
+                courseId = course.id,
+                name = course.name,
+                classroom = course.classroom,
+                teacher = course.teacher,
+                startSection = course.startSection,
+                endSection = course.endSection,
+            ),
+        )
+        editing = null
+        reload()
+    }
+
 
     Scaffold(topBar = {}) { padding ->
     val listState = rememberLazyListState()
@@ -183,6 +240,7 @@ fun TempAdjustScreen(
                         when (change) {
                             is TempAdjustments.Change.Cancel -> change.courseId == course.id
                             is TempAdjustments.Change.Move -> change.courseId == course.id
+                            is TempAdjustments.Change.MovedIn -> change.courseId == course.id
                             // 临时加课没有「停上」，只有「删除」：直接从规则里移除
                             is TempAdjustments.Change.Add ->
                                 tempAdded && TempAdjustments.identityOf(change) == course.id
@@ -214,6 +272,19 @@ fun TempAdjustScreen(
             }
         }
 
+        moveError?.let { error ->
+            item(key = "move_error") {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = error,
+                        style = MiuixTheme.textStyles.body2,
+                        color = MiuixTheme.colorScheme.error,
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    )
+                }
+            }
+        }
+
         item(key = "hint") {
             Text(
                 text = "临时调整只影响选中的这一天，课表原数据不会被修改；" +
@@ -230,6 +301,9 @@ fun TempAdjustScreen(
     TempAdjustDialog(
         target = editing,
         baseCourses = baseCourses,
+        onMoveToDate = { text ->
+            moveCourseToDate(editing, text)
+        },
         onDismiss = { editing = null },
         onSaved = {
             editing = null
@@ -246,6 +320,28 @@ fun TempAdjustScreen(
             reload()
         },
     )
+}
+
+/**
+ * 解析用户填的目标日期。接受 10-21 / 10/21 / 2026-10-21 三种写法；
+ * 缺年份时按 [today] 的年份补。
+ */
+private fun parseMoveTargetDate(text: String, today: LocalDate): LocalDate? {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return null
+    runCatching { LocalDate.parse(trimmed) }.getOrNull()?.let { return it }
+    val parts = trimmed.replace('/', '-').split('-').mapNotNull { it.toIntOrNull() }
+    if (parts.size == 2) {
+        val month = parts[0]
+        val day = parts[1]
+        if (month in 1..12 && day in 1..31) {
+            return runCatching { LocalDate(today.year, month, day) }.getOrNull()
+        }
+    }
+    if (parts.size == 3) {
+        return runCatching { LocalDate(parts[0], parts[1], parts[2]) }.getOrNull()
+    }
+    return null
 }
 
 /** 允许提前安排的最远天数：再远的话教学周/调休都可能还没定下来 */

@@ -19,13 +19,17 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -50,6 +54,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -714,6 +719,11 @@ internal fun TempAdjustDialog(
      * 否则对一节课反复编辑会一次比一次偏得更远。不传时自行解析。
      */
     baseCourses: List<Course>? = null,
+    /**
+     * 跨天移动：把这节课挪到目标日期。传 null 则弹窗不显示「改到」输入框。
+     * 回调收到用户输入的日期文本（未校验，由调用方解析并给出错误提示）。
+     */
+    onMoveToDate: ((String) -> Unit)? = null,
 ) {
     if (target == null) return
     val course = target.first
@@ -761,6 +771,8 @@ internal fun TempAdjustDialog(
         TempAdjustments.apply(base, TempAdjustments.load(date))
     }
     var shiftFollowing by remember(course.id, date) { mutableStateOf(false) }
+    // 跨天移动的目标日期输入
+    var moveToDateText by remember(course.id, date) { mutableStateOf("") }
     // 顺延位移记「相对基准课表的累计位移」：重复编辑时是 3→5→6，
     // 存成 +3 才能让后面的课跟着从基准位置平移 +3，而不是每次只挪 1。
     val cumulativeShift = startSection - baseStartSection
@@ -771,11 +783,12 @@ internal fun TempAdjustDialog(
 
     // 先摘掉这门课当天已有的规则再叠加，避免同一节课存下多条互相矛盾
     fun commit(change: TempAdjustments.Change?) {
-        val others = TempAdjustments.load(date).filter {
-            when (it) {
-                is TempAdjustments.Change.Cancel -> it.courseId != course.id
-                is TempAdjustments.Change.Move -> it.courseId != course.id
-                is TempAdjustments.Change.Add -> true
+        val others = TempAdjustments.load(date).filterNot { change ->
+            when (change) {
+                is TempAdjustments.Change.Cancel -> change.courseId == course.id
+                is TempAdjustments.Change.Move -> change.courseId == course.id
+                is TempAdjustments.Change.MovedIn -> change.courseId == course.id
+                is TempAdjustments.Change.Add -> false
             }
         }
         TempAdjustments.save(date, if (change == null) others else others + change)
@@ -788,17 +801,26 @@ internal fun TempAdjustDialog(
         onDismissRequest = onDismiss,
         liquidGlassBackdrop = rememberLayerBackdrop(),
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
+        // 弹窗本体不滚动，内容一多就会被裁掉、控件互相压在一起。
+        // 这里自己套一层纵向滚动 + 高度上限，内容再长也能滑到底。
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 460.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
             Text(
                 text = "${date.monthNumber}月${date.dayOfMonth}日 · ${course.name}",
                 style = MiuixTheme.textStyles.body1,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                color = MiuixTheme.colorScheme.onSurface,
             )
             Text(
                 text = "只改这一天，课表本身不动",
                 style = MiuixTheme.textStyles.body2,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                modifier = Modifier.padding(top = 4.dp, bottom = 16.dp),
+                // onSurfaceVariantSummary 是 60% 黑，浅色弹窗上几乎看不清；
+                // 次要信息用 onSurfaceSecondary（80% 黑）才读得出来。
+                color = MiuixTheme.colorScheme.onSurfaceSecondary,
+                modifier = Modifier.padding(top = 2.dp, bottom = 12.dp),
             )
 
             if (existing) {
@@ -826,7 +848,11 @@ internal fun TempAdjustDialog(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("节次", style = MiuixTheme.textStyles.body1)
+                Text(
+                    text = "节次",
+                    style = MiuixTheme.textStyles.body1,
+                    color = MiuixTheme.colorScheme.onSurface,
+                )
                 NumberPicker(
                     value = startSection,
                     onValueChange = {
@@ -849,6 +875,46 @@ internal fun TempAdjustDialog(
                     modifier = Modifier.weight(1f),
                 )
             }
+
+            // 跨天改课：这节课挪到别的日子去。
+            // 只有宿主提供了回调才显示 —— 课程详情页给的是「某一周的某一天」，
+            // 跨那一周移动没有意义，强行给会让用户改出一堆无效规则。
+            if (onMoveToDate != null) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "改到",
+                        style = MiuixTheme.textStyles.body1,
+                        color = MiuixTheme.colorScheme.onSurface,
+                    )
+                    NativeMiuixTextField(
+                        value = moveToDateText,
+                        onValueChange = { moveToDateText = it },
+                        label = "目标日期",
+                        useLabelAsPlaceholder = true,
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                        requestFocus = false,
+                    )
+                    TextButton(
+                        text = "挪",
+                        onClick = { onMoveToDate(moveToDateText) },
+                        enabled = moveToDateText.isNotBlank(),
+                        modifier = Modifier.width(64.dp),
+                    )
+                }
+                Text(
+                    text = "填目标日期就整节课挪过去；留空表示只改当天的节次或教室。",
+                    style = MiuixTheme.textStyles.footnote2,
+                    color = MiuixTheme.colorScheme.onSurfaceSecondary,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+
             // 只在真的挪了节次、且后面还有课的时候出现；平时不占版面
             if (sectionDelta != 0 && followingCount > 0) {
                 Spacer(modifier = Modifier.height(12.dp))
@@ -868,7 +934,7 @@ internal fun TempAdjustDialog(
                                 (if (sectionDelta > 0) "后移" else "前移") +
                                 " ${kotlin.math.abs(sectionDelta)} 节，避免与这节课撞车",
                             style = MiuixTheme.textStyles.footnote2,
-                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            color = MiuixTheme.colorScheme.onSurfaceSecondary,
                             modifier = Modifier.padding(top = 2.dp, end = 8.dp),
                         )
                     }

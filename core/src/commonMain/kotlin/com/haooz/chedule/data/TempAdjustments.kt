@@ -85,6 +85,22 @@ object TempAdjustments {
         /** 当天某节课停上。 */
         data class Cancel(val courseId: String) : Change
 
+        /**
+         * 从别的日子**迁入**一节课。
+         *
+         * 跨天移动拆成两条规则分别存在两天：源日放 [Cancel]（那节课从源日消失），
+         * 目标日放本条（这节课在目标日出现）。这样每一天的解析都只读自己那天的规则，
+         * 不必为了知道「有没有课从别处挪来」而把整个学期的规则全读一遍。
+         */
+        data class MovedIn(
+            val courseId: String,
+            val name: String,
+            val classroom: String,
+            val teacher: String,
+            val startSection: Int,
+            val endSection: Int,
+        ) : Change
+
         /** 临时加一节课。 */
         data class Add(
             val name: String,
@@ -117,11 +133,19 @@ object TempAdjustments {
 
         val cancelled = changes.filterIsInstance<Change.Cancel>().map { it.courseId }.toSet()
         val moves = changes.filterIsInstance<Change.Move>().associateBy { it.courseId }
+        // 从别的日子迁进来的课：它们不在本地基准课表里，要补进来
+        val movedIn = changes.filterIsInstance<Change.MovedIn>()
+            .map { it.toCourse(courses.firstOrNull()?.dayOfWeek ?: 1) }
 
         // 临时加课也是「当天的课」：先并进列表，取消/改时间才能作用在它身上。
         // 之前把 Add 放在最后追加，导致给临时课点「停上」或「改时间」完全没反应。
-        val all = courses + changes.filterIsInstance<Change.Add>()
-            .map { it.toCourse(courses.firstOrNull()?.dayOfWeek ?: 1) }
+        // 迁入的课是「同门课换了个日子」：目标日基准课表里若已有同 id 的课，
+        // 说明源日那节没被取消 —— 迁入应该替换它，不能两份并存。
+        val movedInIds = movedIn.map { it.id }.toSet()
+        val all = courses.filterNot { it.id in movedInIds } +
+            changes.filterIsInstance<Change.Add>()
+                .map { it.toCourse(courses.firstOrNull()?.dayOfWeek ?: 1) } +
+            movedIn
 
         // 顺延的位移量优先用编辑时记下的 shiftBy（相对用户当时看到的位置）；
         // 老数据没有该字段，才退回按「原始课表」推导。
@@ -166,6 +190,21 @@ object TempAdjustments {
     /** 临时加课在当天课程列表里的最终 id（老数据没有显式 id 时按原规则推导）。 */
     fun identityOf(add: Change.Add): String =
         add.id.ifBlank { "temp-${add.name.hashCode()}-${add.startSection}" }
+
+    /** 迁入的课转成 Course：身份沿用原课 id，课程信息随规则一起存。 */
+    private fun Change.MovedIn.toCourse(dayOfWeek: Int): Course = Course(
+        id = courseId,
+        name = name,
+        classroom = classroom,
+        teacher = teacher,
+        dayOfWeek = dayOfWeek,
+        startSection = startSection,
+        endSection = endSection,
+        startWeek = 0,
+        endWeek = 0,
+        weekType = Course.WEEK_TYPE_ALL,
+        colorRes = 0,
+    )
 
     private fun Change.Add.toCourse(dayOfWeek: Int): Course {
         val hasTime = !startTime.isNullOrBlank() && !endTime.isNullOrBlank()
@@ -325,6 +364,16 @@ object TempAdjustments {
                                 put("courseId", change.courseId)
                             }
 
+                            is Change.MovedIn -> {
+                                put("type", "movedIn")
+                                put("courseId", change.courseId)
+                                put("name", change.name)
+                                put("classroom", change.classroom)
+                                put("teacher", change.teacher)
+                                put("startSection", change.startSection)
+                                put("endSection", change.endSection)
+                            }
+
                             is Change.Add -> {
                                 put("type", "add")
                                 put("name", change.name)
@@ -363,6 +412,21 @@ object TempAdjustments {
                 }
 
                 "cancel" -> obj.str("courseId")?.let { Change.Cancel(it) }
+
+                "movedIn" -> {
+                    val id = obj.str("courseId") ?: return@mapNotNull null
+                    val name = obj.str("name") ?: return@mapNotNull null
+                    val start = obj.int("startSection") ?: return@mapNotNull null
+                    val end = obj.int("endSection") ?: return@mapNotNull null
+                    Change.MovedIn(
+                        courseId = id,
+                        name = name,
+                        classroom = obj.str("classroom").orEmpty(),
+                        teacher = obj.str("teacher").orEmpty(),
+                        startSection = start,
+                        endSection = end,
+                    )
+                }
 
                 "add" -> {
                     val name = obj.str("name") ?: return@mapNotNull null
