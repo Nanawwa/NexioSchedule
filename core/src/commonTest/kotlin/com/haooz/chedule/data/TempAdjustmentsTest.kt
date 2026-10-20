@@ -322,6 +322,36 @@ class TempAdjustmentsTest {
     }
 
     @Test
+    fun `索引缺失时仍能按实际键清掉过去的日期`() {
+        val yesterday = LocalDate(2026, 10, 18)
+        // 只写实际键、故意不更新索引：模拟索引与存储不同步
+        storage.edit {
+            putString("day_$yesterday", """[{"type":"cancel","courseId":"a"}]""")
+        }
+        val removed = TempAdjustments.pruneBefore(date)
+        assertEquals(1, removed)
+        assertTrue(storage.all().keys.none { it == "day_$yesterday" })
+    }
+
+    @Test
+    fun `索引里有过期日期但键已不在时也能收敛`() {
+        // 索引声称有两天，其中一天的实际键已不存在
+        storage.edit { putString("dates", "2020-01-01,${date}") }
+        TempAdjustments.save(date, listOf(TempAdjustments.Change.Cancel("a")))
+        val removed = TempAdjustments.pruneBefore(date)
+        assertEquals(0, removed)
+        // 索引被重建成「实际还在的日期」，凭空的 2020-01-01 被清掉
+        assertEquals(date.toString(), storage.getString("dates", ""))
+    }
+
+    @Test
+    fun `非本类的键不会被误删`() {
+        storage.edit { putString("other_key", "keep") }
+        TempAdjustments.pruneBefore(date)
+        assertEquals("keep", storage.getString("other_key", ""))
+    }
+
+    @Test
     fun `清理只删过去的日期，今天和以后保留`() {
         val yesterday = LocalDate(2026, 10, 18)
         val tomorrow = LocalDate(2026, 10, 20)

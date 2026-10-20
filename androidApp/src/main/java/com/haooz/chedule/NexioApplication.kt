@@ -100,6 +100,18 @@ class NexioApplication : Application() {
                     runCatching { repository.dateForTeachingWeekDay(week, weekday) }.getOrNull()
                 }
             }
+            // 临时调课只对当天有意义，过了日期的记录留着只会白占空间。
+            // 放在启动的后台线程里：这是一次纯删除，不该拖慢冷启动。
+            runCatching {
+                val today = com.haooz.chedule.data.todayLocalDate()
+                val pruned = com.haooz.chedule.data.TempAdjustments.pruneBefore(today)
+                if (pruned > 0) {
+                    com.haooz.chedule.data.NexioLog.d(
+                        "TempAdjustments",
+                        "pruned $pruned past day(s) before $today",
+                    )
+                }
+            }
         }.start()
     }
 

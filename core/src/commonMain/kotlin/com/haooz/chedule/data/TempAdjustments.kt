@@ -197,16 +197,28 @@ object TempAdjustments {
     }
 
     /**
-     * 清掉今天之前的所有改动，避免长期堆积。
+     * 清掉今天之前的所有改动，避免长期堆积。返回删除的条数。
      *
-     * [KeyValueStore] 没有列举键的能力，所以另存一份日期索引；
-     * 索引与实际键不一致时以实际读取为准，索引只用于知道「该删哪些」。
+     * 以 `day_` 前缀的实际键为准，日期索引只用来重建 —— 索引与实际键不一致时
+     * （旧版本写坏、备份恢复只带过来一半）也能真正删干净。
      */
-    fun pruneBefore(today: LocalDate) {
-        val stale = indexedDates().filter { it < today }
-        if (stale.isEmpty()) return
-        store().edit { stale.forEach { remove(KEY_PREFIX + it.toString()) } }
-        writeIndex(indexedDates().filter { it >= today }.toSet())
+    fun pruneBefore(today: LocalDate): Int {
+        if (!AppStorage.isReady) return 0
+        val stored = store().all().keys.mapNotNull { storedDate(it) }
+        val stale = stored.filter { it < today }
+        if (stale.isNotEmpty()) {
+            store().edit { stale.forEach { remove(KEY_PREFIX + it.toString()) } }
+        }
+        // 索引重建成「仍在存储里的日期」，顺带修掉两者不同步
+        val remaining = stored.filter { it >= today }.toSet()
+        if (remaining != indexedDates()) writeIndex(remaining)
+        return stale.size
+    }
+
+    /** 把 `day_2026-10-21` 这类键还原成日期；不是本类的键返回 null。 */
+    private fun storedDate(key: String): LocalDate? {
+        if (!key.startsWith(KEY_PREFIX)) return null
+        return runCatching { LocalDate.parse(key.removePrefix(KEY_PREFIX).trim()) }.getOrNull()
     }
 
     private fun syncIndex(date: LocalDate, present: Boolean) {
