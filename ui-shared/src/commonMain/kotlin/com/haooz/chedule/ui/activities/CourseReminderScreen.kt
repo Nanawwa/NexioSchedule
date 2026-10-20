@@ -414,12 +414,66 @@ fun CourseReminderScreen(
                                     if (it) {
                                         reminderController.startReminderService()
                                         rlog("reminder_service", "start")
+                                        // 没有精确闹钟时系统会把闹钟塞进最长一小时的窗口，
+                                        // 表现就是「上课不提醒」。开启提醒时直接引导授权，
+                                        // 比让用户自己去权限列表里翻出来可靠得多。
+                                        if (!canScheduleExactAlarms) {
+                                            rlog("master_switch_exact_alarm_launch")
+                                            reminderController.openExactAlarmSettings { onExactAlarmResult() }
+                                        }
                                     } else {
                                         reminderController.stopReminderService()
                                         rlog("reminder_service", "stop")
                                     }
                                 }
                             )
+                        }
+                    }
+
+                    // 提醒前置条件不满足时，直接把原因摆在最上面 ——
+                    // 否则用户只会看到「测试能弹、上课不弹」，无从排查。
+                    item {
+                        val missing = buildList {
+                            if (!notificationGranted) add("通知权限")
+                            if (!canScheduleExactAlarms) add("精确闹钟")
+                            if (!isIgnoringBattery) add("电池优化")
+                        }
+                        if ((preClassReminder || nextDayReminder) && missing.isNotEmpty()) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                insideMargin = PaddingValues(0.dp),
+                            ) {
+                                Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                                    Text(
+                                        text = "提醒可能不会准时触发",
+                                        style = MiuixTheme.textStyles.body1,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MiuixTheme.colorScheme.onSurface,
+                                    )
+                                    Text(
+                                        text = "未开启：" + missing.joinToString("、") +
+                                            "。系统可能延迟甚至拦截提醒。",
+                                        style = MiuixTheme.textStyles.footnote1,
+                                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                        modifier = Modifier.padding(top = 4.dp),
+                                    )
+                                    TextButton(
+                                        text = "去授权",
+                                        onClick = {
+                                            rlog("reminder_prereq_fix", "missing=${missing.joinToString(",")}")
+                                            when {
+                                                !notificationGranted ->
+                                                    reminderController.requestNotificationPermission(onNotificationPermissionResult)
+                                                !canScheduleExactAlarms ->
+                                                    reminderController.openExactAlarmSettings { onExactAlarmResult() }
+                                                else ->
+                                                    reminderController.openBatteryOptimizationSettings(onBatterySettingsResult)
+                                            }
+                                        },
+                                        modifier = Modifier.padding(top = 4.dp),
+                                    )
+                                }
+                            }
                         }
                     }
 

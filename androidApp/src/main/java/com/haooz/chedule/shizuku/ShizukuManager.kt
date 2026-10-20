@@ -133,7 +133,13 @@ object ShizukuManager {
             bindLatch = CountDownLatch(1)
 
             val args = Shizuku.UserServiceArgs(
-                ComponentName("com.haooz.chedule", PrivilegedServiceImpl::class.java.name)
+                // 必须用实际 applicationId：共存包是 com.haooz.chedule.fork，
+                // 写死原包名会导致 Shizuku 用户服务绑定超时 3 秒后失败，
+                // 闹钟唤醒的后台进程很可能在这段时间里被系统回收，通知就永远发不出去。
+                ComponentName(
+                    com.haooz.chedule.BuildConfig.APPLICATION_ID,
+                    PrivilegedServiceImpl::class.java.name,
+                )
             )
                 .daemon(false)
                 .processNameSuffix("privileged")
