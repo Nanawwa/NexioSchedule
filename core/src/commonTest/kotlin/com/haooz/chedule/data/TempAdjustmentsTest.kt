@@ -75,6 +75,90 @@ class TempAdjustmentsTest {
     }
 
     @Test
+    fun `顺延把后面的课整体后移`() {
+        val courses = listOf(
+            course("a", start = 3, end = 4),
+            course("b", start = 5, end = 6),
+            course("c", start = 7, end = 8),
+        )
+        val result = TempAdjustments.apply(
+            courses,
+            listOf(
+                TempAdjustments.Change.Move(
+                    "a", startSection = 5, endSection = 6, shiftFollowing = true,
+                )
+            )
+        )
+        val byId = result.associateBy { it.id }
+        assertEquals(5, byId.getValue("a").startSection)
+        assertEquals(7, byId.getValue("b").startSection)
+        assertEquals(9, byId.getValue("c").startSection)
+    }
+
+    @Test
+    fun `顺延只影响原本排在它后面的课`() {
+        val courses = listOf(
+            course("before", start = 1, end = 2),
+            course("a", start = 3, end = 4),
+            course("after", start = 5, end = 6),
+        )
+        val result = TempAdjustments.apply(
+            courses,
+            listOf(
+                TempAdjustments.Change.Move(
+                    "a", startSection = 4, endSection = 5, shiftFollowing = true,
+                )
+            )
+        ).associateBy { it.id }
+        assertEquals(1, result.getValue("before").startSection)
+        assertEquals(4, result.getValue("a").startSection)
+        assertEquals(6, result.getValue("after").startSection)
+    }
+
+    @Test
+    fun `顺延以原始课表为基准，重复保存不会叠加`() {
+        val courses = listOf(course("a", start = 3, end = 4), course("b", start = 5, end = 6))
+        val change = TempAdjustments.Change.Move(
+            "a", startSection = 4, endSection = 5, shiftFollowing = true,
+        )
+        // 同一条规则连续应用两次（等价于用户反复编辑后保存），结果必须一致
+        val once = TempAdjustments.apply(courses, listOf(change))
+        val twice = TempAdjustments.apply(once, listOf(change))
+        assertEquals(once, twice)
+        assertEquals(4, twice.first { it.id == "a" }.startSection)
+        assertEquals(6, twice.first { it.id == "b" }.startSection)
+    }
+
+    @Test
+    fun `自己另有改动的课不被顺延叠加`() {
+        val courses = listOf(course("a", start = 3, end = 4), course("b", start = 5, end = 6))
+        val result = TempAdjustments.apply(
+            courses,
+            listOf(
+                TempAdjustments.Change.Move(
+                    "a", startSection = 5, endSection = 6, shiftFollowing = true,
+                ),
+                TempAdjustments.Change.Move("b", startSection = 9, endSection = 10),
+            )
+        ).associateBy { it.id }
+        assertEquals(9, result.getValue("b").startSection)
+    }
+
+    @Test
+    fun `顺延不会把课移到第一节之前`() {
+        val courses = listOf(course("a", start = 5, end = 6), course("b", start = 7, end = 8))
+        val result = TempAdjustments.apply(
+            courses,
+            listOf(
+                TempAdjustments.Change.Move(
+                    "a", startSection = 1, endSection = 2, shiftFollowing = true,
+                )
+            )
+        ).associateBy { it.id }
+        assertTrue(result.getValue("b").startSection >= 1)
+    }
+
+    @Test
     fun `加课进入当天列表`() {
         val courses = listOf(course("a"))
         val result = TempAdjustments.apply(

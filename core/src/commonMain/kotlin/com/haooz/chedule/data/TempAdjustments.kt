@@ -41,12 +41,18 @@ object TempAdjustments {
 
     /** 一条临时改动。 */
     sealed interface Change {
-        /** 当天某节课换了节次/教室。只改这一天，课表数据不动。 */
+        /**
+         * 当天某节课换了节次/教室。只改这一天，课表数据不动。
+         *
+         * [shiftFollowing] 打开时，原本排在这节课**之后**的课会整体平移同样的节次数
+         * —— 一节拖堂/顺延，后面的课不会停在原地与它撞车。
+         */
         data class Move(
             val courseId: String,
             val startSection: Int,
             val endSection: Int,
             val classroom: String? = null,
+            val shiftFollowing: Boolean = false,
         ) : Change
 
         /** 当天某节课停上。 */
@@ -76,15 +82,37 @@ object TempAdjustments {
         val cancelled = changes.filterIsInstance<Change.Cancel>().map { it.courseId }.toSet()
         val moves = changes.filterIsInstance<Change.Move>().associateBy { it.courseId }
 
+        // 顺延的位移量永远以「原始课表」为基准计算。
+        // 如果拿已经叠加过 Move 的结果再算一次，用户改两回时间就会平移两倍。
+        val shifts = mutableMapOf<String, Int>()
+        for (move in changes.filterIsInstance<Change.Move>()) {
+            if (!move.shiftFollowing) continue
+            val anchor = courses.firstOrNull { it.id == move.courseId } ?: continue
+            val delta = move.startSection - anchor.startSection
+            if (delta == 0) continue
+            courses.asSequence()
+                .filter { it.id != anchor.id && it.startSection > anchor.endSection }
+                .forEach { later ->
+                    shifts[later.id] = (shifts[later.id] ?: 0) + delta
+                }
+        }
+
         val kept = courses
             .filter { it.id !in cancelled }
             .map { course ->
-                val move = moves[course.id] ?: return@map course
-                course.copy(
-                    startSection = move.startSection,
-                    endSection = move.endSection,
-                    classroom = move.classroom ?: course.classroom,
-                )
+                val move = moves[course.id]
+                if (move != null) {
+                    return@map course.copy(
+                        startSection = move.startSection,
+                        endSection = move.endSection,
+                        classroom = move.classroom ?: course.classroom,
+                    )
+                }
+                // 自己另有一条 Move 的课以显式规则为准，不再叠加顺延
+                val shift = shifts[course.id] ?: return@map course
+                val start = (course.startSection + shift).coerceAtLeast(1)
+                val end = (course.endSection + shift).coerceAtLeast(start)
+                course.copy(startSection = start, endSection = end)
             }
             .toMutableList()
 
@@ -190,6 +218,7 @@ object TempAdjustments {
                                 put("startSection", change.startSection)
                                 put("endSection", change.endSection)
                                 change.classroom?.let { put("classroom", it) }
+                                if (change.shiftFollowing) put("shiftFollowing", true)
                             }
 
                             is Change.Cancel -> {
@@ -223,7 +252,13 @@ object TempAdjustments {
                     val id = obj.str("courseId") ?: return@mapNotNull null
                     val start = obj.int("startSection") ?: return@mapNotNull null
                     val end = obj.int("endSection") ?: return@mapNotNull null
-                    Change.Move(id, start, end, obj.str("classroom"))
+                    Change.Move(
+                        courseId = id,
+                        startSection = start,
+                        endSection = end,
+                        classroom = obj.str("classroom"),
+                        shiftFollowing = obj.bool("shiftFollowing") == true,
+                    )
                 }
 
                 "cancel" -> obj.str("courseId")?.let { Change.Cancel(it) }
@@ -252,4 +287,7 @@ object TempAdjustments {
 
     private fun JsonObject.int(key: String): Int? =
         (this[key] as? JsonPrimitive)?.content?.toIntOrNull()
+
+    private fun JsonObject.bool(key: String): Boolean? =
+        (this[key] as? JsonPrimitive)?.takeUnless { it.isString }?.content?.toBooleanStrictOrNull()
 }

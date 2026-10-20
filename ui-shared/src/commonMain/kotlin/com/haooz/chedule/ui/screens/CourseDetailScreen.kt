@@ -54,7 +54,10 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.haooz.chedule.data.Course
+import com.haooz.chedule.data.CourseRepository
+import com.haooz.chedule.data.DayScheduleResolver
 import com.haooz.chedule.data.TempAdjustments
+import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.layout.CollapsibleTopAppBar
 import com.haooz.chedule.ui.basic.LiquidTopBarButton
 import top.yukonga.miuix.kmp.layout.ProgressiveBlurTopBar
@@ -719,6 +722,19 @@ internal fun TempAdjustDialog(
             .any { it.courseId == course.id }
     }
 
+    // 顺延要作用于「这节课之后的课」，所以得知道当天还有哪几节。
+    // 这里只做一次解析（弹窗生命周期内不变），失败时按没有后续课处理。
+    val dayCourses = remember(course.id, date) {
+        runCatching {
+            DayScheduleResolver.resolveDaySchedule(date, CourseRepository()).courses
+        }.getOrDefault(emptyList())
+    }
+    var shiftFollowing by remember(course.id, date) { mutableStateOf(false) }
+    val sectionDelta = startSection - course.startSection
+    val followingCount = dayCourses.count {
+        it.id != course.id && it.startSection > course.endSection
+    }
+
     // 先摘掉这门课当天已有的规则再叠加，避免同一节课存下多条互相矛盾
     fun commit(change: TempAdjustments.Change?) {
         val others = TempAdjustments.load(date).filter {
@@ -799,6 +815,35 @@ internal fun TempAdjustDialog(
                     modifier = Modifier.weight(1f),
                 )
             }
+            // 只在真的挪了节次、且后面还有课的时候出现；平时不占版面
+            if (sectionDelta != 0 && followingCount > 0) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "后面的课一起顺延",
+                            style = MiuixTheme.textStyles.body1,
+                            color = MiuixTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            text = "后面 $followingCount 节课整体" +
+                                (if (sectionDelta > 0) "后移" else "前移") +
+                                " ${kotlin.math.abs(sectionDelta)} 节，避免与这节课撞车",
+                            style = MiuixTheme.textStyles.footnote2,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            modifier = Modifier.padding(top = 2.dp, end = 8.dp),
+                        )
+                    }
+                    Switch(
+                        checked = shiftFollowing,
+                        onCheckedChange = { shiftFollowing = it },
+                    )
+                }
+            }
             Spacer(modifier = Modifier.height(16.dp))
 
             TextButton(
@@ -814,6 +859,7 @@ internal fun TempAdjustDialog(
                                 startSection = startSection,
                                 endSection = endSection,
                                 classroom = classroom.ifBlank { null },
+                                shiftFollowing = shiftFollowing && sectionDelta != 0,
                             )
                         } else {
                             null

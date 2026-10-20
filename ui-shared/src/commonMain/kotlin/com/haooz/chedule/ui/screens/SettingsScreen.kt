@@ -398,7 +398,7 @@ fun SettingsScreen(
                                 )
                                 ArrowPreference(
                                     title = "临时调课",
-                                    summary = "只改某一天：停上、换教室、改节次或加一节",
+                                    summary = "只改某一天：停上、换教室、改节次，可顺延后面的课",
                                     onClick = {
                                         settingsRouter.navigate(AppRoute.TempAdjust)
                                     }

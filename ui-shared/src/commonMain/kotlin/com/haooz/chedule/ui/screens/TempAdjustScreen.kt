@@ -121,11 +121,9 @@ fun TempAdjustScreen(
                 date = selectedDate,
                 today = today,
                 changeCount = changes.size,
+                canGoNext = selectedDate < today.plusDays(MAX_FORWARD_DAYS),
                 onPrevious = { selectedDate = selectedDate.plusDays(-1) },
-                onNext = {
-                    if (selectedDate == today) return@DateNavCard
-                    selectedDate = selectedDate.plusDays(1)
-                },
+                onNext = { selectedDate = selectedDate.plusDays(1) },
                 onToday = { selectedDate = today },
             )
         }
@@ -194,7 +192,8 @@ fun TempAdjustScreen(
         item(key = "hint") {
             Text(
                 text = "临时调整只影响选中的这一天，课表原数据不会被修改；" +
-                    "换一天会看到那一天自己的调整。",
+                    "可以往后翻 $MAX_FORWARD_DAYS 天提前安排，" +
+                    "改节次时还能把后面的课一起顺延。",
                 style = MiuixTheme.textStyles.footnote2,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 modifier = Modifier.padding(horizontal = 4.dp),
@@ -223,6 +222,9 @@ fun TempAdjustScreen(
     )
 }
 
+/** 允许提前安排的最远天数：再远的话教学周/调休都可能还没定下来 */
+private const val MAX_FORWARD_DAYS = 30L
+
 private fun weekName(date: LocalDate): String = when (date.dayOfWeek.isoDayNumber) {
     1 -> "周一"
     2 -> "周二"
@@ -239,14 +241,16 @@ private fun dateLabel(date: LocalDate): String =
 /**
  * 日期导航：一行里左「前一天」、中间日期、右「后一天」。
  *
- * 已经是今天时右按钮变成「今天」并禁用 —— 之前的实现里「后一天」在今天就跳不动，
- * 看起来像按钮坏了；这里直接把状态说清楚。
+ * 之前「后一天」在今天就禁用，导致只能改今天和过去的日期 —— 而临时调课最常见的
+ * 用法恰恰是提前把明天的变动记下来。现在可以往后翻 [MAX_FORWARD_DAYS] 天，
+ * 并保留一个「回到今天」的快捷键。
  */
 @Composable
 private fun DateNavCard(
     date: LocalDate,
     today: LocalDate,
     changeCount: Int,
+    canGoNext: Boolean,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onToday: () -> Unit,
@@ -273,7 +277,8 @@ private fun DateNavCard(
                     )
                     Text(
                         text = when {
-                            changeCount > 0 -> "已调整 $changeCount 处"
+                            // 顺延一条规则会改动多节课，按「条」计数才不会被误解成只改了一节
+                            changeCount > 0 -> "已调整 $changeCount 条"
                             isToday -> "今天"
                             else -> "无调整"
                         },
@@ -286,10 +291,18 @@ private fun DateNavCard(
                     )
                 }
                 TextButton(
-                    text = if (isToday) "今天" else "后一天",
-                    onClick = if (isToday) onToday else onNext,
-                    enabled = !isToday,
+                    text = "后一天",
+                    onClick = onNext,
+                    enabled = canGoNext,
                     minWidth = 72.dp,
+                )
+            }
+            if (!isToday) {
+                TextButton(
+                    text = "回到今天",
+                    onClick = onToday,
+                    minWidth = 96.dp,
+                    modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 4.dp),
                 )
             }
         }
