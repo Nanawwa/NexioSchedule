@@ -205,6 +205,15 @@ object ComplicationRenderer {
 
     private const val SHORT_NAME_WIDTH = 8
 
+    // 所有状态文案集中在这里。之前各渲染函数各写一套，同一张图上会出现
+    // 「今天没课了」和「今天没有课」这样的同义重复。
+    private const val STATE_REMAIN_END = "距下课"
+    private const val STATE_REMAIN_START = "距上课"
+    private const val STATE_CLASS = "上课中"
+    private const val STATE_DONE = "今天没课了"
+    private const val STATE_NO_DATA = "还未同步"
+    private const val SYNC_HINT = "点一下手表同步"
+
     // ── LONG_TEXT：大槽位 / 矩形槽 ───────────────────────────────────────────
 
     private fun longText(
@@ -258,14 +267,14 @@ object ComplicationRenderer {
             }
 
             WatchState.Done -> LongTextComplicationData.Builder(
-                text("今天没有课了"),
-                text("今天没有课"),
-            ).setTitle(text("Nexio")).setTapAction(tapIntent(context)).build()
+                text("今天的课已经全部上完"),
+                text("今天的课已全部结束"),
+            ).setTitle(text("今天")).setTapAction(tapIntent(context)).build()
 
             WatchState.NoData -> LongTextComplicationData.Builder(
                 text("在手表上点一下可手动同步"),
-                text("还没收到课表"),
-            ).setTitle(text("打开手机 Nexio 同步"))
+                text("还没收到课表，点一下可手动同步"),
+            ).setTitle(text("还没同步"))
                 .setTapAction(tapIntent(context))
                 .build()
         }
@@ -336,13 +345,25 @@ object ComplicationRenderer {
                 .setTapAction(tapIntent(context))
                 .build()
 
-            else -> RangedValueComplicationData.Builder(
+            // 空状态不能画满环：满环的含义是「100% 完成」，而没数据是「不知道」。
+            WatchState.Done -> RangedValueComplicationData.Builder(
                 value = 1f,
                 min = 0f,
                 max = 1f,
-                contentDescription = text("今天没有课"),
+                contentDescription = text("今天的课已全部结束"),
+            ).setTitle(text("今天"))
+                .setText(text("没课了"))
+                .setMonochromaticImage(bookImage(context))
+                .setTapAction(tapIntent(context))
+                .build()
+
+            WatchState.NoData -> RangedValueComplicationData.Builder(
+                value = 0f,
+                min = 0f,
+                max = 1f,
+                contentDescription = text("还没收到课表，点一下同步"),
             ).setTitle(text("Nexio"))
-                .setText(text(if (state == WatchState.NoData) "同步" else "没课"))
+                .setText(text("待同步"))
                 .setMonochromaticImage(bookImage(context))
                 .setTapAction(tapIntent(context))
                 .build()
@@ -390,7 +411,24 @@ object ComplicationRenderer {
         ).setTapAction(tapIntent(context)).build()
     }
 
-    /** 画一张方形图：状态 + 课名 + 地点/教师 + 倒计时 */
+    /**
+     * 中央大槽位的位图。
+     *
+     * 版式遵循表盘设计的「一眼可读」原则：槽位只有约 40mm 直径，
+     * 用户抬手 1~2 秒就要读懂，所以固定成四层，且每层只放一件事：
+     *
+     * ```
+     *   距下课          ← 小字，说明下面那个数字是什么（语境）
+     *    25            ← 最大字号，倒计时数字，视觉焦点
+     *   分钟
+     * 大学英语         ← 中等，课名
+     * 博A201          ← 小字，次要信息
+     * ```
+     *
+     * 之前把状态词（「正在上课」）和课名、倒计时分三行平铺，字号还都差不多，
+     * 结果没有主次；「今天没课了」和「今天没有课」更是同一句话写了两遍。
+     * 这里状态词只在没有倒计时可显示时才出现，不再与内容重复。
+     */
     private fun renderPhotoBitmap(
         context: Context,
         state: WatchState,
@@ -401,63 +439,86 @@ object ComplicationRenderer {
         val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-
-        // 不铺满底色：表盘会把这张图叠在自己的背景上，画纯黑在浅色表盘上就是
-        // 一个突兀的方块。改成一层半透明深色底板托住白字 —— 深色 / 浅色 / 彩色
-        // 表盘下都能读，又不会把槽位糊死。
-        canvas.drawColor(Color.TRANSPARENT)
-        val scrimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x99000000.toInt() }
-        val inset = size * 0.06f
-        canvas.drawRoundRect(inset, inset, size - inset, size - inset, 48f, 48f, scrimPaint)
-        paint.color = Color.WHITE
-        paint.textAlign = Paint.Align.CENTER
         val centerX = size / 2f
 
-        paint.textSize = 34f
-        paint.isFakeBoldText = false
-        canvas.drawText(headlineOf(state), centerX, 72f, paint)
+        // 半透明圆角底板：叠在任意表盘背景上都能读，又不会糊死槽位
+        canvas.drawColor(Color.TRANSPARENT)
+        val scrimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x99000000.toInt() }
+        val inset = size * 0.05f
+        canvas.drawRoundRect(inset, inset, size - inset, size - inset, 56f, 56f, scrimPaint)
 
-        val (primary, secondary) = when (state) {
-            is WatchState.InClass -> state.course.name to listOfNotNull(
-                state.course.classroom.takeIf { settings.showClassroom && it.isNotEmpty() },
-                state.course.teacher.takeIf { settings.showTeacher && it.isNotEmpty() },
-            ).joinToString(" · ")
+        val white = 0xFFFFFFFF.toInt()
+        val dim = 0xCCFFFFFF.toInt()
 
-            is WatchState.OnBreak -> state.next.name to
-                listOfNotNull(
-                    clockOf(state.next.startMinute) + " 上课",
-                    state.next.classroom.takeIf { settings.showClassroom && it.isNotEmpty() },
-                ).joinToString(" · ")
-
-            WatchState.Done -> "今天没有课" to ""
-            WatchState.NoData -> "还没同步" to "打开手机 App"
+        fun drawCentered(text: String, y: Float, px: Float, color: Int, bold: Boolean) {
+            paint.color = color
+            paint.textAlign = Paint.Align.CENTER
+            paint.textSize = px
+            paint.isFakeBoldText = bold
+            canvas.drawText(text, centerX, y, paint)
         }
 
-        paint.textSize = 44f
-        paint.isFakeBoldText = true
-        drawWrapped(canvas, paint, primary, centerX, 150f, size - 48f, 50f)
-
-        if (secondary.isNotEmpty()) {
-            paint.textSize = 28f
-            paint.isFakeBoldText = false
-            canvas.drawText(secondary, centerX, 268f, paint)
-        }
-
-        val remain = when (state) {
-            is WatchState.InClass -> minutesLabel(state.remainToEndMillis)
+        // 有倒计时可显示（上课中 / 课间）时，用「标签 + 大数字 + 单位」的焦点式版式
+        val countdown = when (state) {
+            is WatchState.InClass -> Triple(
+                STATE_REMAIN_END,
+                state.remainToEndMillis,
+                state.course,
+            )
             is WatchState.OnBreak ->
-                if (settings.breakCountdown) minutesLabel(state.remainToStartMillis)
-                else clockOf(state.next.startMinute)
-
-            else -> ""
+                if (settings.breakCountdown) {
+                    Triple(STATE_REMAIN_START, state.remainToStartMillis, state.next)
+                } else null
+            else -> null
         }
-        if (remain.isNotEmpty()) {
-            paint.textSize = 42f
-            paint.isFakeBoldText = false
-            canvas.drawText(remain, centerX, size - 48f, paint)
+
+        if (countdown != null) {
+            val (label, remainMillis, course) = countdown
+            val minutes = ((remainMillis.coerceAtLeast(0) + 59_999) / 60_000).toInt()
+
+            drawCentered(label, 96f, 30f, dim, false)
+
+            // 倒计时是主角：数字放到最大，单位单独一行压在小字里
+            val numberText = if (minutes >= 60) (minutes / 60).toString() else minutes.toString()
+            val unitText = if (minutes >= 60) "小时" else "分钟"
+            drawCentered(numberText, 210f, 116f, white, true)
+            drawCentered(unitText, 252f, 28f, dim, false)
+
+            drawCentered(shortName(course.name), 320f, 36f, white, true)
+            val sub = subtitleOf(course, settings)
+            if (sub.isNotEmpty()) {
+                drawCentered(sub, 356f, 26f, dim, false)
+            } else {
+                // 没有地点/教师时，把「距上课」的剩余小时数补在末行，避免大片空白
+                if (minutes >= 60) {
+                    drawCentered("${minutes % 60}分", 356f, 26f, dim, false)
+                }
+            }
+            return bitmap
+        }
+
+        // 没有倒计时：今天是空状态或已下课，用居中两行，绝不重复同一句话
+        val (headline, detail) = when (state) {
+            WatchState.Done -> STATE_DONE to ""
+            WatchState.NoData -> STATE_NO_DATA to SYNC_HINT
+            // 课间但关掉了倒计时：直接给下一节的上课时刻
+            is WatchState.OnBreak -> clockOf(state.next.startMinute) to shortName(state.next.name)
+            is WatchState.InClass -> STATE_CLASS to shortName(state.course.name)
+        }
+        if (detail.isEmpty()) {
+            drawCentered(headline, size / 2f + 18f, 52f, white, true)
+        } else {
+            drawCentered(headline, size / 2f - 14f, 64f, white, true)
+            drawCentered(detail, size / 2f + 44f, 30f, dim, false)
         }
         return bitmap
     }
+
+    private fun subtitleOf(course: WatchCourse, settings: WearSettings): String =
+        listOfNotNull(
+            course.classroom.takeIf { settings.showClassroom && it.isNotEmpty() },
+            course.teacher.takeIf { settings.showTeacher && it.isNotEmpty() },
+        ).joinToString(" · ")
 
     private fun minutesLabel(remainMillis: Long): String {
         val minutes = (remainMillis.coerceAtLeast(0) + 59_999) / 60_000
@@ -509,19 +570,21 @@ object ComplicationRenderer {
         isPreview: Boolean,
     ): ComplicationData {
         val unit = if (settings.preciseCountdown) TimeUnit.SECONDS else null
-        val (elapsed, total, title, text) = when (state) {
+        // Builder 的第三个参数是 contentDescription（读屏用），不是可见正文。
+        // 之前把它当成了正文、又从未调 setText，结果表盘上只有进度环和课名，
+        // 中间那行时间一直是空的 —— 这就是「同步了也不显示信息」的一种。
+        val parts = when (state) {
             is WatchState.InClass -> {
                 val totalMin = state.course.durationMinutes.toFloat().coerceAtLeast(1f)
                 val elapsedMin = (totalMin - state.remainToEndMillis / 60_000f).coerceIn(0f, totalMin)
                 ProgressParts(
-                    elapsedMin,
-                    totalMin,
-                    state.course.name,
-                    if (isPreview) text("25分") else countdown(
-                        nowMillis + state.remainToEndMillis,
-                        TimeDifferenceStyle.SHORT_SINGLE_UNIT,
-                        unit,
+                    value = elapsedMin,
+                    target = totalMin,
+                    title = state.course.name,
+                    body = if (isPreview) text("距下课 25分") else countdownWithLabel(
+                        nowMillis + state.remainToEndMillis, "距下课 ^1", unit,
                     ),
+                    desc = "${STATE_CLASS} ${state.course.name}，距下课",
                 )
             }
 
@@ -530,25 +593,35 @@ object ComplicationRenderer {
                     .toFloat().coerceAtLeast(1f)
                 val remainMin = (state.remainToStartMillis / 60_000f).coerceIn(0f, totalMin)
                 ProgressParts(
-                    totalMin - remainMin,
-                    totalMin,
-                    "课间",
-                    if (!settings.breakCountdown) text(clockOf(state.next.startMinute))
-                    else if (isPreview) text("10分")
-                    else countdown(
-                        nowMillis + state.remainToStartMillis,
-                        TimeDifferenceStyle.SHORT_SINGLE_UNIT,
-                        unit,
+                    value = totalMin - remainMin,
+                    target = totalMin,
+                    title = "课间",
+                    body = if (!settings.breakCountdown) text("${clockOf(state.next.startMinute)} 上课")
+                    else if (isPreview) text("距上课 10分")
+                    else countdownWithLabel(
+                        nowMillis + state.remainToStartMillis, "距上课 ^1", unit,
                     ),
+                    desc = "课间，下一节 ${state.next.name}",
                 )
             }
 
-            WatchState.Done -> ProgressParts(1f, 1f, "Nexio", text("没课"))
-            WatchState.NoData -> ProgressParts(0f, 1f, "Nexio", text("同步"))
+            WatchState.Done -> ProgressParts(
+                value = 1f, target = 1f, title = "今天", body = text(STATE_DONE), desc = STATE_DONE,
+            )
+
+            WatchState.NoData -> ProgressParts(
+                value = 0f, target = 1f, title = "Nexio", body = text("待同步"),
+                desc = "$STATE_NO_DATA，$SYNC_HINT",
+            )
         }
 
-        return GoalProgressComplicationData.Builder(elapsed, total, text)
-            .setTitle(text(title))
+        return GoalProgressComplicationData.Builder(
+            parts.value.coerceIn(0f, parts.target),
+            parts.target,
+            text(parts.desc),
+        )
+            .setTitle(text(parts.title))
+            .setText(parts.body)
             .setMonochromaticImage(bookImage(context))
             .setTapAction(tapIntent(context))
             .build()
@@ -558,7 +631,10 @@ object ComplicationRenderer {
         val value: Float,
         val target: Float,
         val title: String,
-        val text: ComplicationText,
+        /** 表盘中央那行可见文字 */
+        val body: ComplicationText,
+        /** 读屏念的整句，不显示 */
+        val desc: String,
     )
 
     // ── WEIGHTED_ELEMENTS：分段式大组件 ──────────────────────────────────────
@@ -582,22 +658,32 @@ object ComplicationRenderer {
             0xFF3C4043.toInt(), // 已完成
             0xFF202124.toInt(), // 分隔
         )
+        // 分段条只表达一件事：这一节课（或这个课间）已经过去多少。
+        // 之前固定三等分，与真实进度无关，纯粹是装饰性的假数据。
         val elements = when (state) {
-            is WatchState.InClass -> listOf(
+            is WatchState.InClass -> {
+                val done = progressOf(state) ?: 0f
+                listOf(
+                    WeightedElementsComplicationData.Element(done.coerceAtLeast(0.001f), colors[2]),
+                    WeightedElementsComplicationData.Element((1f - done).coerceAtLeast(0.001f), colors[0]),
+                )
+            }
+
+            is WatchState.OnBreak -> {
+                val done = progressOf(state) ?: 0f
+                listOf(
+                    WeightedElementsComplicationData.Element(done.coerceAtLeast(0.001f), colors[2]),
+                    WeightedElementsComplicationData.Element((1f - done).coerceAtLeast(0.001f), colors[1]),
+                )
+            }
+
+            // 没课 / 没数据：整条留白，不用假色块填满
+            WatchState.Done -> listOf(
                 WeightedElementsComplicationData.Element(1f, colors[2]),
-                WeightedElementsComplicationData.Element(1f, colors[0]),
-                WeightedElementsComplicationData.Element(1f, colors[1]),
             )
 
-            is WatchState.OnBreak -> listOf(
-                WeightedElementsComplicationData.Element(1f, colors[2]),
+            WatchState.NoData -> listOf(
                 WeightedElementsComplicationData.Element(1f, colors[3]),
-                WeightedElementsComplicationData.Element(1f, colors[1]),
-            )
-
-            else -> listOf(
-                WeightedElementsComplicationData.Element(0.01f, colors[3]),
-                WeightedElementsComplicationData.Element(0.99f, colors[1]),
             )
         }
         return WeightedElementsComplicationData.Builder(elements, text(describeState(state)))
@@ -627,11 +713,12 @@ object ComplicationRenderer {
         }
     }
 
+    /** 读屏软件念的整句；与可见文案共用同一套状态词，避免两种说法 */
     private fun describeState(state: WatchState): String = when (state) {
-        is WatchState.InClass -> "正在上课 ${state.course.name}"
+        is WatchState.InClass -> "$STATE_CLASS ${state.course.name}"
         is WatchState.OnBreak -> "下一节 ${state.next.name}"
-        WatchState.Done -> "今天没有课"
-        WatchState.NoData -> "还没收到课表"
+        WatchState.Done -> STATE_DONE
+        WatchState.NoData -> "$STATE_NO_DATA，$SYNC_HINT"
     }
 
     /** 分钟数 → "HH:mm" */
